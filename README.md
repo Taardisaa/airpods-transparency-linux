@@ -1,9 +1,18 @@
-# AirPods Transparency for Linux
+# AirPods Control for Linux
 
-在 Linux 上读取和调节 AirPods **自定义通透模式**，不必连接 iPhone 或 Mac。
+Linux 上的 AirPods 控制中心：**实时电量、聆听模式、通透调节、系统托盘、配置预设**。
+
+版本 0.2 新增：
+
+- **总览**：左右耳和充电盒电量、充电状态、当前模式、型号、固件。未报告的数据明确显示未知。
+- **模式切换**：降噪、通透、自适应、关闭，收到耳机确认后才报告成功。
+- **系统托盘**：查看电量、切换模式、应用预设、重新打开窗口。系统支持托盘时，关闭窗口会收起到托盘。
+- **配置预设**：保存当前已应用的声音参数，可选包含聆听模式；一键应用，原值自动备份。
+- **共享后台服务**：GUI、托盘、CLI 共用一个持续 AACP 连接；同一用户的通透操作串行执行。
+- **JSON 调试**：状态快照、变化事件、模式、预设、后台服务都能通过命令行操作。
 
 提供中文 Qt 桌面界面和零第三方依赖的命令行。基于 LibrePods 已公开的协议重新实现，
-只操作通透参数 `0x0018`，不操作助听器参数 `0x002A`、听力图或固件。
+通透调节只操作参数 `0x0018`，不操作助听器参数 `0x002A`、听力图或固件。
 默认优先通过 BlueZ 的 D-Bus GATT 接口读写，未发现服务时才使用直接 ATT 连接。
 命令行依赖系统的 `busctl`（systemd）和 `bluetoothctl`（BlueZ）。
 
@@ -25,6 +34,65 @@ python3 -m venv .venv
 .venv/bin/airpods-transparency devices
 .venv/bin/airpods-transparency gui
 ```
+
+也可以使用新命令 `.venv/bin/airpods-control gui`；原来的 `airpods-transparency` 命令保持兼容。
+
+## 电量、模式和配置预设
+
+GUI 包含「总览」「声音调节」「配置预设」三个页面，指定 `--mac` 时自动读取当前设置。
+总览每三秒刷新后台状态；后台持续接收耳机通知。充电盒不报告电量时显示“未报告”，
+不会把未知当作 0%。耳机断开后，旧电量不会继续当作实时电量显示。
+
+```sh
+airpods-control status --mac AA:BB:CC:DD:EE:FF --json
+airpods-control watch --mac AA:BB:CC:DD:EE:FF --json
+airpods-control mode anc --mac AA:BB:CC:DD:EE:FF --json
+airpods-control mode transparency --mac AA:BB:CC:DD:EE:FF --json
+airpods-control preset save "Office" --mac AA:BB:CC:DD:EE:FF --json
+airpods-control preset list --json
+airpods-control preset apply "Office" --mac AA:BB:CC:DD:EE:FF --json
+airpods-control preset delete "Office" --json
+```
+
+以上命令假定虚拟环境已激活；也可使用 `.venv/bin/airpods-control` 完整前缀。
+`watch` 输出 JSON Lines，在状态变化时输出，Ctrl+C 结束。模式可选
+`anc`、`transparency`、`adaptive`、`off`。选择关闭时，会先启用耳机的“关闭聆听模式”选项。
+某型号或固件不接受指定模式时，工具会报未确认，而不会假报成功。
+
+预设保存的是**耳机当前已应用的**参数，不是尚未应用的 GUI 编辑值。
+默认记录当前已知的聆听模式；加 `--without-mode` 可只保存声音设置。
+预设存放于 `${XDG_CONFIG_HOME:-~/.config}/airpods-transparency/presets.json`，
+可移植到其他设备，不包含地址、序列号或听力图。相同名称再次保存会覆盖该预设。
+应用时保留目标设备原有 EQ；原值仍在写入前备份。模式切换若失败，会明确报告声音参数已应用、
+模式未确认的部分成功状态，不自动反复修改设备。
+
+托盘需要桌面环境支持系统托盘/StatusNotifier。支持时关闭窗口会收起到托盘，
+通过托盘菜单退出界面；`gui --tray` 可直接从托盘启动。
+不支持托盘的桌面会正常显示窗口，避免应用消失后无法找回。
+
+## 后台服务与诊断
+
+首次使用 GUI 或设备 CLI 时会自动启动用户级服务，不需要 sudo。
+服务只为 BlueZ **已经连接**的耳机打开控制通道；断开后按退避策略重试，
+不会主动连接耳机或抢占手机的音频。退出 GUI 后服务仍可供 CLI 使用。
+
+```sh
+airpods-control service start --json
+airpods-control service status --json
+airpods-control doctor --mac AA:BB:CC:DD:EE:FF --json
+airpods-control service stop --json
+```
+
+`service status` 包含版本、PID 和本地日志路径；该命令不会主动启动服务。
+日志默认位于 `${XDG_STATE_HOME:-~/.local/state}/airpods-transparency/service.log`，
+按 1 MiB 轮转，保留两份历史。日志不保存原始蓝牙报文或设备序列号。
+升级后先 `service stop`，下次使用将启动新版服务。
+
+服务使用用户私有目录下的 Unix socket（0700 目录、0600 socket），双向检查本机用户身份；
+没有 HTTP 监听端口。GUI 与 CLI 都通过 JSON 请求调用同一控制器，写请求中断后不会自动重发。
+
+当前版本没有开机自动启动、摘耳自动暂停、全局快捷键、系统 EQ 或跨苹果设备自动切换，
+这些属于后续路线图。后台已读取的佩戴状态只用于诊断，不会自动改变播放行为。
 
 Ubuntu 如果缺少 venv：先安装 `python3-venv`。仅使用命令行可将 `'.[gui]'` 改为 `.`。
 无需安装即可运行命令行：`python3 -m airpods_transparency --help`。

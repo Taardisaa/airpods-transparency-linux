@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airpods-transparency-linux"
-version = "0.1.0"
-description = "Local Linux controls for AirPods custom transparency, with backup and readback verification"
+version = "0.2.0"
+description = "Linux AirPods control center: battery, listening modes, tray, and transparency presets"
 requires-python = ">=3.10"
 license = {text = "GPL-3.0-or-later"}
 readme = "README.md"
@@ -17,6 +17,7 @@ test = ["pytest>=7"]
 
 [project.scripts]
 airpods-transparency = "airpods_transparency.cli:main"
+airpods-control = "airpods_transparency.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["airpods_transparency*"]

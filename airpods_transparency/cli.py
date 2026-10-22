@@ -2,10 +2,12 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from .controller import Controller, save_backup
+from .controller import save_backup
+from .service import RemoteController as Controller, rpc
 from .transport import normalize_mac
 
 
@@ -40,6 +42,25 @@ def parser(json_errors=False):
     gui.add_argument("--mac", type=normalize_mac)
     gui.add_argument("--demo", action="store_true", help="Simulated device; no Bluetooth access")
     gui.add_argument("--transport", choices=["auto", "bluez", "att"], default="auto")
+    gui.add_argument("--tray", action="store_true", help="Start minimized to the tray when available")
+    for name in ("status", "watch", "mode"):
+        cmd = commands.add_parser(name)
+        cmd.add_argument("--mac", required=True, type=normalize_mac)
+        cmd.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        if name == "mode":
+            cmd.add_argument("value", choices=["off", "anc", "transparency", "adaptive"])
+        if name == "watch":
+            cmd.add_argument("--interval", type=float, default=2)
+    preset = commands.add_parser("preset")
+    preset.add_argument("operation", choices=["list", "save", "apply", "delete"])
+    preset.add_argument("name", nargs="?")
+    preset.add_argument("--mac", type=normalize_mac)
+    preset.add_argument("--without-mode", action="store_true")
+    preset.add_argument("--transport", choices=["auto", "bluez", "att"], default="auto")
+    preset.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    service = commands.add_parser("service")
+    service.add_argument("operation", choices=["start", "status", "stop"])
+    service.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     for name in ("doctor", "read", "set", "backup", "restore"):
         cmd = commands.add_parser(name)
         cmd.add_argument("--mac", required=True, type=normalize_mac)
@@ -94,8 +115,10 @@ def doctor(mac, transport="auto"):
         diagnostics["configuration_error"] = str(exc)
     controller = Controller(mac, transport=transport)
     try:
+        diagnostics["service"] = rpc("ping")
         diagnostics["values"] = controller.read().values()
         diagnostics["backend"] = controller.backend
+        diagnostics["control"] = rpc("status", mac)
     except Exception as exc:
         # Carry completed diagnostics into the structured error response.
         exc.diagnostics = diagnostics
@@ -111,7 +134,7 @@ def main(argv=None):
         args = parser(json_errors=args.json).parse_args(argv)
         if args.command == "gui":
             from .gui import launch
-            return launch(args.mac, args.demo, args.transport)
+            return launch(args.mac, args.demo, args.transport, args.tray)
         if args.command == "devices":
             found = devices()
             if args.json:
@@ -123,6 +146,36 @@ def main(argv=None):
         if args.command == "doctor":
             result = doctor(args.mac, args.transport)
             print(json.dumps({"ok": True, **result}, indent=2))
+            return 0
+        if args.command == "service":
+            print(json.dumps(rpc("shutdown" if args.operation == "stop" else "ping",
+                                 start=args.operation == "start"), indent=2))
+            return 0
+        if args.command in ("status", "mode"):
+            print(json.dumps(rpc(args.command, args.mac, **({"mode": args.value} if args.command == "mode" else {})), indent=2))
+            return 0
+        if args.command == "watch":
+            if not 0.2 <= args.interval <= 60:
+                raise ValueError("Watch interval must be between 0.2 and 60 seconds")
+            previous = None
+            while True:
+                result = rpc("status", args.mac)
+                if result != previous:
+                    print(json.dumps(result), flush=True)
+                    previous = result
+                time.sleep(args.interval)
+        if args.command == "preset":
+            if args.operation != "list" and not args.name:
+                raise ValueError("Specify the preset name")
+            if args.operation in ("save", "apply") and not args.mac:
+                raise ValueError("Specify --mac to save or apply a device preset")
+            result = rpc("preset_" + args.operation, args.mac, name=args.name,
+                         include_mode=not args.without_mode, transport=args.transport)
+            if "raw_hex" in result:
+                from .settings import Settings
+                result["values"] = Settings(bytes.fromhex(result.pop("raw_hex"))).values()
+                result["verified"] = True
+            print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0
         controller = Controller(args.mac, transport=args.transport)
         if args.command == "read":
@@ -142,12 +195,15 @@ def main(argv=None):
         return 0
     except (OSError, ValueError, RuntimeError, ImportError, subprocess.SubprocessError) as exc:
         if args.json:
-            print(json.dumps({"ok": False, "error": {"type": type(exc).__name__, "message": str(exc),
-                  "errno": getattr(exc, "errno", None), "att_code": getattr(exc, "code", None)},
+            print(json.dumps({"ok": False, "error": getattr(exc, "remote_error", {
+                  "type": type(exc).__name__, "message": str(exc),
+                  "errno": getattr(exc, "errno", None), "att_code": getattr(exc, "code", None)}),
                   "diagnostics": getattr(exc, "diagnostics", {})}, indent=2))
         else:
             print(f"Error: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

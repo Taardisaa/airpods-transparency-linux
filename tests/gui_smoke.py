@@ -10,11 +10,13 @@ from airpods_transparency.settings import Settings
 
 def drain(app, window):
     deadline = time.monotonic() + 5
-    while window.pending and time.monotonic() < deadline:
+    while (window.pending or window.status_future or window.profile_future) and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
     app.processEvents()
     assert window.pending is None
+    assert window.status_future is None
+    assert window.profile_future is None
 
 
 def test_demo_load_apply_and_preserve_rounding():
@@ -52,4 +54,32 @@ def test_demo_load_apply_and_preserve_rounding():
     assert abs(window.loaded.values()["left_amplification"] + 0.3) < 1e-6
     assert window.loaded.raw[40:44] == bytes(buf[40:44])
     assert "演示" in window.status.text()
+    window.close()
+
+
+def test_overview_modes_and_presets_share_demo_state(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = Window(demo=True)
+    window.show()
+    drain(app, window)
+    assert window.battery_bars["left"].value() == 86
+    assert window.device_state["mode"] == "transparency"
+    window.change_mode("anc")
+    drain(app, window)
+    assert window.device_state["mode"] == "anc"
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText", lambda *args: ("Office", True))
+    window.save_profile()
+    drain(app, window)
+    assert window.profile_combo.currentText() == "Office"
+    window.controls["left_amplification"].setValue(-0.5)
+    window.apply()
+    drain(app, window)
+    assert window.loaded.values()["left_amplification"] == -0.5
+    window.apply_profile("Office")
+    drain(app, window)
+    assert window.loaded.values()["left_amplification"] == 0
+    assert window.device_state["mode"] == "anc"
+    window.delete_profile()
+    drain(app, window)
+    assert window.profile_combo.count() == 0
     window.close()
