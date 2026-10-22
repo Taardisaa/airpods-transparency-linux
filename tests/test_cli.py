@@ -1,4 +1,5 @@
 from airpods_transparency.cli import collect_changes, main, parser
+import json
 
 
 def test_common_and_per_ear_cli_precedence():
@@ -17,3 +18,15 @@ def test_transport_error_is_reported_without_traceback(monkeypatch, capsys):
     monkeypatch.setattr("airpods_transparency.controller.Controller.read", fail)
     assert main(["read", "--mac", "AA:BB:CC:DD:EE:FF"]) == 1
     assert "blocked" in capsys.readouterr().err
+
+
+def test_json_error_and_bad_arguments(monkeypatch, capsys):
+    def fail(self):
+        raise ConnectionRefusedError(111, "refused")
+    monkeypatch.setattr("airpods_transparency.controller.Controller.read", fail)
+    assert main(["read", "--mac", "AA:BB:CC:DD:EE:FF", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is False
+    assert result["error"]["errno"] == 111
+    assert main(["--json", "read", "--mac", "invalid"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False

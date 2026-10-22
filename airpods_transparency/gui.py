@@ -24,7 +24,7 @@ class DemoController:
 
 
 class Window(QtWidgets.QWidget):
-    def __init__(self, mac=None, demo=False):
+    def __init__(self, mac=None, demo=False, transport="auto"):
         super().__init__()
         self.setWindowTitle("AirPods · 通透调节" + (" · 演示" if demo else ""))
         self.resize(760, 680)
@@ -33,6 +33,7 @@ class Window(QtWidgets.QWidget):
         self.loaded = None
         self.controller = DemoController() if demo else None
         self.demo = demo
+        self.transport = transport
         self.controls = {}
         self.setStyleSheet("""
             QWidget { font-size: 14px; }
@@ -117,6 +118,8 @@ class Window(QtWidgets.QWidget):
             self.address.setEnabled(False)
             self.find_button.setEnabled(False)
             self.load()
+        elif mac:
+            QtCore.QTimer.singleShot(0, self.load)
 
     def set_loaded(self, state):
         self.group.setEnabled(state)
@@ -171,7 +174,7 @@ class Window(QtWidgets.QWidget):
             self.status.setText(str(exc))
             return
         if not self.demo:
-            self.controller = Controller(mac)
+            self.controller = Controller(mac, transport=self.transport)
         self.loaded = None
         self.run(self.controller.read, self.populate, "读取通透参数…")
 
@@ -186,7 +189,8 @@ class Window(QtWidgets.QWidget):
                 widget.setChecked(values[name])
             else:
                 widget.setValue(values[name])
-        self.status.setText("演示模式 · 已读取模拟参数。" if self.demo else "已读取。调整后点击“备份并应用”。")
+        self.status.setText("演示模式 · 已读取模拟参数。" if self.demo else
+                            f"已通过 {self.controller.backend} 读取。调整后点击“备份并应用”。")
 
     def edited_values(self):
         # Only genuinely edited controls become patches: rounded display values
@@ -245,8 +249,8 @@ class Window(QtWidgets.QWidget):
         event.accept()
 
 
-def launch(mac=None, demo=False):
+def launch(mac=None, demo=False, transport="auto"):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
-    window = Window(mac, demo)
+    window = Window(mac, demo, transport)
     window.show()
     return app.exec()

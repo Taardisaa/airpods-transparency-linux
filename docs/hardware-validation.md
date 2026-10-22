@@ -22,6 +22,16 @@
 
 音调、环境噪声降低、对话增强和自己声音增音没有修改。
 
+## BlueZ 接管 ATT 后的连接拒绝修复
+
+随后 BlueZ 完成 GATT 服务发现，直接连接 PSM `0x001f` 返回 `ECONNREFUSED`，
+而耳机仍处于音频连接状态。通过 BlueZ `ReadValue` 可以读取相同的 104 字节数据。
+
+修复后自动按设备和 UUID 选择 BlueZ GATT 传输。实机 `doctor --json` 报告
+`ok=true`、`backend=bluez`，返回当前参数。另进行了同值写入测试：先备份原值，
+再经 BlueZ `WriteValue`（此特征只声明无响应写入）写回完全相同的值，随后
+`ReadValue` 验证完整字节一致。没有改变任何调节参数，也没有重启蓝牙或断开音频。
+
 ## 尚未确认
 
 - 用户主观听感与实际声音放大程度。

@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .settings import Settings
-from .transport import ATTClient, normalize_mac
+from .transport import normalize_mac
+from .bluez import SettingsClient
 
 
 def backup_directory():
@@ -37,17 +38,20 @@ def load_backup(path, mac):
 
 
 class Controller:
-    def __init__(self, mac, backup_dir=None, factory=ATTClient):
+    def __init__(self, mac, backup_dir=None, factory=None, transport="auto"):
         self.mac = normalize_mac(mac)
         self.backup_dir = backup_dir
-        self.factory = factory
+        self.factory = factory or (lambda address: SettingsClient(address, transport))
+        self.backend = None
 
     def read(self):
         with self.factory(self.mac) as client:
+            self.backend = getattr(client, "backend", "custom")
             return Settings(client.read())
 
     def apply(self, changes=None, restore=None, expected=None):
         with self.factory(self.mac) as client:
+            self.backend = getattr(client, "backend", "custom")
             current = Settings(client.read())
             if expected is not None and current.raw != expected.raw:
                 raise RuntimeError("Settings changed since loading. Reload before applying.")
