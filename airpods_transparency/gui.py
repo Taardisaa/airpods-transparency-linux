@@ -27,7 +27,7 @@ class Window(QtWidgets.QWidget):
     def __init__(self, mac=None, demo=False, transport="auto"):
         super().__init__()
         self.setWindowTitle("AirPods · 通透调节" + (" · 演示" if demo else ""))
-        self.resize(760, 680)
+        self.resize(940, 680)
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.pending = None
         self.loaded = None
@@ -35,6 +35,7 @@ class Window(QtWidgets.QWidget):
         self.demo = demo
         self.transport = transport
         self.controls = {}
+        self.sliders = {}
         self.setStyleSheet("""
             QWidget { font-size: 14px; }
             QGroupBox { font-weight: 600; margin-top: 12px; padding-top: 16px; }
@@ -80,7 +81,8 @@ class Window(QtWidgets.QWidget):
                     widget.setRange(lo, hi)
                     widget.setSingleStep(0.05)
                     widget.setDecimals(3)
-                grid.addWidget(widget, row_index, column)
+                panel = widget if suffix == "conversation_boost" else self.with_slider(name, widget)
+                grid.addWidget(panel, row_index, column)
                 self.controls[name] = widget
         own = QtWidgets.QDoubleSpinBox()
         own.setRange(0, 1)
@@ -88,7 +90,7 @@ class Window(QtWidgets.QWidget):
         own.setDecimals(3)
         self.controls["own_voice"] = own
         grid.addWidget(QtWidgets.QLabel("自己声音增音 · 0 至 1"), 5, 0)
-        grid.addWidget(own, 5, 1)
+        grid.addWidget(self.with_slider("own_voice", own), 5, 1)
         layout.addWidget(self.group)
         note = QtWidgets.QLabel("数值为协议归一化值，并非分贝。EQ 和未编辑参数保持原值。\n"
                                "自定义通透与当前聆听模式分别设置；使用时需将耳机切换到通透模式。")
@@ -121,6 +123,26 @@ class Window(QtWidgets.QWidget):
         elif mac:
             QtCore.QTimer.singleShot(0, self.load)
 
+    def with_slider(self, name, spin):
+        panel = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(panel)
+        row.setContentsMargins(0, 0, 0, 0)
+        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        slider.setRange(round(spin.minimum() * 1000), round(spin.maximum() * 1000))
+        slider.setSingleStep(10)
+        slider.setPageStep(100)
+        slider.setMinimumWidth(100)
+        slider.setAccessibleName(name.replace("_", " "))
+        slider.setToolTip("拖动调节；点击“备份并应用”后写入耳机。")
+        slider.setValue(round(spin.value() * 1000))
+        slider.valueChanged.connect(lambda value: spin.setValue(value / 1000))
+        spin.valueChanged.connect(lambda value: slider.setValue(round(value * 1000)))
+        spin.setMaximumWidth(100)
+        row.addWidget(slider, 1)
+        row.addWidget(spin)
+        self.sliders[name] = slider
+        return panel
+
     def set_loaded(self, state):
         self.group.setEnabled(state)
         self.enabled.setEnabled(state)
@@ -152,7 +174,9 @@ class Window(QtWidgets.QWidget):
             self.status.setText(f"操作失败：{exc}\n请检查连接与 README 中的 DeviceID 配置，然后重新读取。")
         self.set_loaded(self.loaded is not None)
         if self.loaded:
-            self.controls["own_voice"].setEnabled("own_voice" in self.loaded.values())
+            available = "own_voice" in self.loaded.values()
+            self.controls["own_voice"].setEnabled(available)
+            self.sliders["own_voice"].setEnabled(available)
 
     def find(self):
         def found(result):

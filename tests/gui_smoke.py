@@ -29,7 +29,11 @@ def test_demo_load_apply_and_preserve_rounding():
     window.controller.settings = Settings(bytes(buf))
     window.populate(window.controller.read())
     assert window.edited_values() == {}
-    window.controls["left_amplification"].setValue(-0.3)
+    assert window.sliders["left_tone"].value() == 123
+    window.sliders["left_amplification"].setValue(-300)
+    assert window.controls["left_amplification"].value() == -0.3
+    window.controls["right_noise_reduction"].setValue(0.25)
+    assert window.sliders["right_noise_reduction"].value() == 250
     window.apply()
     drain(app, window)
     assert abs(window.loaded.values()["left_amplification"] + 0.3) < 1e-6
