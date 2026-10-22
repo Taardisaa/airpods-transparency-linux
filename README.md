@@ -24,6 +24,7 @@ python3 -m venv .venv
 
 Ubuntu 如果缺少 venv：先安装 `python3-venv`。仅使用命令行可将 `'.[gui]'` 改为 `.`。
 无需安装即可运行命令行：`python3 -m airpods_transparency --help`。
+精简系统上 Qt 界面可能还需要系统运行库：`sudo apt install libegl1 libxcb-cursor0`。
 
 界面：输入或查找耳机地址 → 读取设置 → 调整 → 备份并应用。
 “启用自定义通透模式”控制自定义参数是否启用；耳机当前聆听模式仍需切换到**通透**，
