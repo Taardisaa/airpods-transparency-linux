@@ -36,6 +36,8 @@ class Window(QtWidgets.QWidget):
         self.transport = transport
         self.controls = {}
         self.sliders = {}
+        self._populating = False
+        self._syncing = False
         self.setStyleSheet("""
             QWidget { font-size: 14px; }
             QGroupBox { font-weight: 600; margin-top: 12px; padding-top: 16px; }
@@ -62,6 +64,10 @@ class Window(QtWidgets.QWidget):
         layout.addLayout(row)
         self.enabled = QtWidgets.QCheckBox("启用自定义通透模式")
         layout.addWidget(self.enabled)
+        self.link_ears = QtWidgets.QCheckBox("同步左右耳 · 调整任一侧时同时调整另一侧")
+        self.link_ears.setChecked(True)
+        self.link_ears.setToolTip("同步增音、音调、环境降噪和对话增强。读取时保留耳机原值，编辑时才同步。")
+        layout.addWidget(self.link_ears)
         self.group = QtWidgets.QGroupBox("环境声音")
         grid = QtWidgets.QGridLayout(self.group)
         for column, label in enumerate(("调节项", "左耳", "右耳")):
@@ -91,6 +97,10 @@ class Window(QtWidgets.QWidget):
         self.controls["own_voice"] = own
         grid.addWidget(QtWidgets.QLabel("自己声音增音 · 0 至 1"), 5, 0)
         grid.addWidget(self.with_slider("own_voice", own), 5, 1)
+        for name, widget in self.controls.items():
+            if name.startswith(("left_", "right_")):
+                signal = widget.toggled if isinstance(widget, QtWidgets.QCheckBox) else widget.valueChanged
+                signal.connect(lambda value, field=name: self.sync_ears(field, value))
         layout.addWidget(self.group)
         note = QtWidgets.QLabel("数值为协议归一化值，并非分贝。EQ 和未编辑参数保持原值。\n"
                                "自定义通透与当前聆听模式分别设置；使用时需将耳机切换到通透模式。")
@@ -146,8 +156,23 @@ class Window(QtWidgets.QWidget):
     def set_loaded(self, state):
         self.group.setEnabled(state)
         self.enabled.setEnabled(state)
+        self.link_ears.setEnabled(state)
         self.apply_button.setEnabled(state)
         self.restore_button.setEnabled(state and not self.demo)
+
+    def sync_ears(self, name, value):
+        if self._populating or self._syncing or not self.link_ears.isChecked():
+            return
+        ear, suffix = name.split("_", 1)
+        other = self.controls[("right_" if ear == "left" else "left_") + suffix]
+        self._syncing = True
+        try:
+            if isinstance(other, QtWidgets.QCheckBox):
+                other.setChecked(value)
+            else:
+                other.setValue(value)
+        finally:
+            self._syncing = False
 
     def run(self, work, callback, message):
         if self.pending:
@@ -206,13 +231,17 @@ class Window(QtWidgets.QWidget):
         self.loaded = settings
         values = settings.values()
         self.enabled.setChecked(values["enabled"])
-        for name, widget in self.controls.items():
-            if name not in values:
-                widget.setEnabled(False)
-            elif isinstance(widget, QtWidgets.QCheckBox):
-                widget.setChecked(values[name])
-            else:
-                widget.setValue(values[name])
+        self._populating = True
+        try:
+            for name, widget in self.controls.items():
+                if name not in values:
+                    widget.setEnabled(False)
+                elif isinstance(widget, QtWidgets.QCheckBox):
+                    widget.setChecked(values[name])
+                else:
+                    widget.setValue(values[name])
+        finally:
+            self._populating = False
         self.status.setText("演示模式 · 已读取模拟参数。" if self.demo else
                             f"已通过 {self.controller.backend} 读取。调整后点击“备份并应用”。")
 
