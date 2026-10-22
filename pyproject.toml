@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airpods-transparency-linux"
+version = "0.1.0"
+description = "Local Linux controls for AirPods custom transparency, with backup and readback verification"
+requires-python = ">=3.10"
+license = {text = "GPL-3.0-or-later"}
+readme = "README.md"
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.5,<7"]
+test = ["pytest>=7"]
+
+[project.scripts]
+airpods-transparency = "airpods_transparency.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["airpods_transparency*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
