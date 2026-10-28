@@ -37,6 +37,14 @@ pip install '.[gui]'
 
 后续命令均在仓库目录、已激活的虚拟环境中运行。只使用命令行时，可将 `'.[gui]'` 换成 `.`。
 
+将应用图标加入当前用户的应用菜单：
+
+```bash
+python tools/install_desktop.py
+```
+
+随后可在应用菜单搜索 **AirPods Control** 或 **AirPods 控制中心**。启动项使用当前虚拟环境，请保留仓库及 `.venv` 目录。
+
 ## 首次配置
 
 ### 启用自定义通透调节

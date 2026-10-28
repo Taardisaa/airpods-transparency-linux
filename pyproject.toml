@@ -22,5 +22,8 @@ airpods-control = "airpods_transparency.cli:main"
 [tool.setuptools.packages.find]
 include = ["airpods_transparency*"]
 
+[tool.setuptools.package-data]
+airpods_transparency = ["assets/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

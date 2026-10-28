@@ -1,6 +1,7 @@
 """Qt desktop controls. Bluetooth operations run off the GUI thread."""
 import struct
 import sys
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -217,7 +218,7 @@ class Window(QtWidgets.QWidget):
     def build_tray(self):
         if self.demo or not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
             return
-        self.tray = QtWidgets.QSystemTrayIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume), self)
+        self.tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon(str(Path(__file__).parent / "assets/airpods-control.svg")), self)
         menu = QtWidgets.QMenu(self)
         menu.addAction("打开控制中心", self.show_window)
         self.tray_status = menu.addAction("等待耳机状态…")
@@ -590,6 +591,9 @@ class Window(QtWidgets.QWidget):
 
 def launch(mac=None, demo=False, transport="auto", tray=False):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv[:1])
+    app.setApplicationName("io.github.Taardisaa.AirPodsControl")
+    app.setDesktopFileName("io.github.Taardisaa.AirPodsControl")
+    app.setWindowIcon(QtGui.QIcon(str(Path(__file__).parent / "assets/airpods-control.svg")))
     window = Window(mac, demo, transport)
     if not (tray and window.tray):
         window.show()
