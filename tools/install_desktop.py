@@ -35,7 +35,7 @@ def main():
         "Name=AirPods Control", "Name[zh_CN]=AirPods 控制中心",
         "Comment=Battery, listening modes and sound settings for AirPods",
         f"Exec={quote_exec(sys.executable)} -m airpods_transparency gui",
-        f"Icon={APP_ID}", "Terminal=false", "Categories=AudioVideo;Audio;Settings;",
+        f"Icon={APP_ID}", "Terminal=false", "Categories=AudioVideo;Audio;",
         "Keywords=AirPods;Bluetooth;Headphones;Noise;Transparency;",
         f"StartupWMClass={APP_ID}", "StartupNotify=true", "",
     ])
