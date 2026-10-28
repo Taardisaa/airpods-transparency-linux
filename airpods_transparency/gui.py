@@ -31,6 +31,7 @@ class Window(QtWidgets.QWidget):
         self.resize(940, 680)
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.pending = None
+        self.pending_error_label = None
         self.loaded = None
         self.controller = DemoController() if demo else None
         self.demo = demo
@@ -303,7 +304,15 @@ class Window(QtWidgets.QWidget):
     def update_overview(self, state):
         self.device_state = state
         connected = state.get("connected", False)
-        self.connection_label.setText((state.get("name") or "AirPods") + (" · 已连接" if connected else " · 未连接"))
+        if connected:
+            connection = " · 已连接"
+        elif state.get("bluetooth_connected") is True:
+            connection = " · 蓝牙已连接，控制通道不可用"
+        elif state.get("bluetooth_connected") is False:
+            connection = " · 未连接"
+        else:
+            connection = " · 连接状态未知"
+        self.connection_label.setText((state.get("name") or "AirPods") + connection)
         self.device_label.setText(f"型号：{state.get('model') or '未知'}    固件：{state.get('firmware') or '未知'}")
         parts = []
         for part, bar in self.battery_bars.items():
@@ -453,7 +462,7 @@ class Window(QtWidgets.QWidget):
         finally:
             self._syncing = False
 
-    def run(self, work, callback, message):
+    def run(self, work, callback, message, error_label=None):
         if self.pending:
             return
         self.set_loaded(False)
@@ -462,6 +471,7 @@ class Window(QtWidgets.QWidget):
         self.address.setEnabled(False)
         self.status.setText(message)
         self.pending = (self.pool.submit(work), callback)
+        self.pending_error_label = error_label
         self.update_actions()
 
     def poll(self):
@@ -477,7 +487,7 @@ class Window(QtWidgets.QWidget):
             callback(future.result())
         except Exception as exc:
             self.loaded = None
-            self.status.setText(f"操作失败：{exc}\n请检查连接与 README 中的 DeviceID 配置，然后重新读取。")
+            self.status.setText(f"{self.pending_error_label or '操作失败'}：{exc}")
         self.set_loaded(self.loaded is not None)
         if self.loaded:
             available = "own_voice" in self.loaded.values()
@@ -506,7 +516,8 @@ class Window(QtWidgets.QWidget):
         if not self.demo:
             self.controller = Controller(mac, transport=self.transport)
         self.loaded = None
-        self.run(self.controller.read, self.populate, "读取通透参数…")
+        self.refresh_overview()
+        self.run(self.controller.read, self.populate, "读取通透参数…", "声音参数暂不可用（不代表蓝牙未连接）")
 
     def populate(self, settings):
         self.loaded = settings

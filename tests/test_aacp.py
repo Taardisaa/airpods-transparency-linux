@@ -15,6 +15,13 @@ def test_battery_unknown_case_is_not_zero_percent():
     assert client.state["battery"]["case"] == {"percent": None, "charging": None, "available": False}
 
 
+def test_single_right_earbud_notification_is_valid():
+    client = AACPClient(MAC)
+    client.parse(bytes.fromhex('040004000400010201580201'))
+    assert client.state['battery']['right']['percent'] == 88
+    assert 'left' not in client.state['battery']
+
+
 @pytest.mark.parametrize("packet", ["04000400040003", "040004000400010201ff0201",
                                     "040004000400010202420201", "04000400040004"])
 def test_malformed_battery_does_not_partially_update(packet):

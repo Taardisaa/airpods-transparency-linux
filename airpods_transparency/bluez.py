@@ -6,6 +6,8 @@ never by the generated object-path suffix or the cached Value property.
 """
 import json
 import subprocess
+import re
+import xml.etree.ElementTree as ET
 
 from .transport import ATTClient, normalize_mac
 
@@ -20,13 +22,71 @@ def bus_call(path, interface, method, *arguments):
         capture_output=True, text=True, timeout=10,
     )
     if result.returncode:
-        raise RuntimeError(f"BlueZ {method}: {result.stderr.strip() or 'D-Bus call failed'}")
+        raise RuntimeError(f"BlueZ {method}: {result.stderr.strip() or 'D-Bus call failed'} (exit {result.returncode})")
     return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def child_paths(path):
+    result = subprocess.run(
+        ["busctl", "--system", "--timeout=8", "--xml-interface", "introspect", "org.bluez", path],
+        capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise RuntimeError(f"BlueZ introspection {path}: {result.stderr.strip() or 'failed'} (exit {result.returncode})")
+    return [path.rstrip("/") + "/" + node.attrib["name"]
+            for node in ET.fromstring(result.stdout).findall("node")
+            if re.fullmatch(r"[A-Za-z0-9_]+", node.get("name", ""))]
+
+
+def property_value(path, interface, name):
+    result = subprocess.run(
+        ["busctl", "--system", "--timeout=8", "--json=short", "get-property",
+         "org.bluez", path, interface, name], capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise RuntimeError(f"BlueZ {name}: {result.stderr.strip() or 'property read failed'} (exit {result.returncode})")
+    return json.loads(result.stdout)["data"]
+
+
+def device_paths(mac):
+    name = "dev_" + normalize_mac(mac).replace(":", "_")
+    paths = []
+    for adapter in child_paths("/org/bluez"):
+        if re.fullmatch(r"hci\d+", adapter.rsplit("/", 1)[-1]):
+            paths.extend(p for p in child_paths(adapter) if p.rsplit("/", 1)[-1] == name)
+    return paths
+
+
+def device_connected(mac):
+    # Query only this device. A bad or unserializable property on any other
+    # nearby device must not make a connected AirPods disappear from the UI.
+    return any(property_value(path, "org.bluez.Device1", "Connected") for path in device_paths(mac))
+
+
+def find_transparency_targeted(mac):
+    candidates = []
+    for device in device_paths(mac):
+        for service in child_paths(device):
+            if not service.rsplit("/", 1)[-1].startswith("service"):
+                continue
+            for path in child_paths(service):
+                if not path.rsplit("/", 1)[-1].startswith("char"):
+                    continue
+                if property_value(path, CHARACTERISTIC, "UUID").lower() == TRANSPARENCY_UUID:
+                    candidates.append((path, property_value(path, CHARACTERISTIC, "Flags")))
+    return unique_characteristic(candidates)
+
+
+def unique_characteristic(candidates):
+    if len(candidates) > 1:
+        raise ValueError("Multiple transparency characteristics found; select a single connected adapter")
+    return candidates[0] if candidates else None
 
 
 def find_transparency(mac):
     device_suffix = "/dev_" + normalize_mac(mac).replace(":", "_")
-    response = bus_call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
+    try:
+        response = bus_call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return find_transparency_targeted(mac)
     candidates = []
     for path, interfaces in response["data"][0].items():
         # Device identity is an entire path component; supports non-hci0 adapters.
@@ -35,9 +95,7 @@ def find_transparency(mac):
         props = interfaces.get(CHARACTERISTIC, {})
         if props.get("UUID", {}).get("data", "").lower() == TRANSPARENCY_UUID:
             candidates.append((path, props.get("Flags", {}).get("data", [])))
-    if len(candidates) > 1:
-        raise ValueError("Multiple transparency characteristics found; select a single connected adapter")
-    return candidates[0] if candidates else None
+    return unique_characteristic(candidates)
 
 
 class BlueZClient:

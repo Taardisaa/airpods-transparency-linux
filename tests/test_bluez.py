@@ -84,3 +84,29 @@ def test_multiple_adapters_fail_closed(monkeypatch):
     with pytest.raises(ValueError, match="Multiple"):
         with bluez.SettingsClient(MAC):
             pytest.fail("should not select an arbitrary adapter")
+
+
+def test_global_bluez_failure_does_not_hide_selected_device(monkeypatch):
+    device = PATH.split('/service')[0]
+    service = PATH.rsplit('/', 1)[0]
+    tree = {'/org/bluez': ['/org/bluez/hci1'], '/org/bluez/hci1': [device],
+            device: [service], service: [PATH]}
+    def fail(*args):
+        raise RuntimeError('GetManagedObjects failed with no stderr')
+    calls = []
+    def prop(path, interface, name):
+        calls.append((path, name))
+        return {'Connected': True, 'UUID': bluez.TRANSPARENCY_UUID,
+                'Flags': ['read', 'write-without-response']}[name]
+    monkeypatch.setattr(bluez, 'bus_call', fail)
+    monkeypatch.setattr(bluez, 'child_paths', lambda path: tree[path])
+    monkeypatch.setattr(bluez, 'property_value', prop)
+    assert bluez.device_connected(MAC) is True
+    assert bluez.find_transparency(MAC) == (PATH, ['read', 'write-without-response'])
+    assert calls == [(device, 'Connected'), (PATH, 'UUID'), (PATH, 'Flags')]
+
+
+def test_targeted_connection_check_reports_disconnected(monkeypatch):
+    monkeypatch.setattr(bluez, 'device_paths', lambda mac: [PATH.split('/service')[0]])
+    monkeypatch.setattr(bluez, 'property_value', lambda *args: False)
+    assert bluez.device_connected(MAC) is False

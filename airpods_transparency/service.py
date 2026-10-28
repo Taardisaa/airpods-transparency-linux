@@ -52,6 +52,7 @@ class Session:
         self.stop = threading.Event()
         self.ready = threading.Event()
         self.error = None
+        self.bluetooth_connected = None
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
@@ -63,13 +64,10 @@ class Session:
                     if not self.client.sock:
                         # Avoid initiating a Bluetooth connection or stealing audio
                         # from a phone. AACP is opened only for an existing link.
-                        from .bluez import bus_call
-                        objects = bus_call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
-                        suffix = "/dev_" + self.mac.replace(":", "_")
-                        connected = any(p.endswith(suffix) and
-                            interfaces.get("org.bluez.Device1", {}).get("Connected", {}).get("data")
-                            for p, interfaces in objects["data"][0].items())
-                        if not connected:
+                        from .bluez import device_connected
+                        self.bluetooth_connected = None
+                        self.bluetooth_connected = device_connected(self.mac)
+                        if not self.bluetooth_connected:
                             raise ConnectionError("AirPods are not connected in BlueZ")
                         self.client.connect()
                         self.client.pump(1, lambda: bool(self.client.state["battery"]) and
@@ -95,7 +93,7 @@ class Session:
         self.ready.wait(6)
         with self.lock:
             state = self.client.snapshot()
-            state.update(mac=self.mac, error=self.error)
+            state.update(mac=self.mac, error=self.error, bluetooth_connected=self.bluetooth_connected)
             return state
 
     def mode(self, mode):

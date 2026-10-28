@@ -18,7 +18,9 @@ airpods-control doctor --mac AA:BB:CC:DD:EE:FF --json
 - `watch`：有变化时输出一行 JSON，Ctrl+C 结束。轮询间隔可设为 0.2～60 秒。
 - `doctor`：诊断配对、连接、DeviceID、后台服务和声音参数访问。
 
-`connected` 表示 AirPods 控制通道状态。`ears` 是协议中的主耳 / 次耳佩戴状态，不保证对应左耳 / 右耳；当前应用不会据此自动暂停播放。
+`connected` 表示 AirPods 控制通道状态，`bluetooth_connected` 表示 BlueZ 报告的蓝牙连接状态（检查失败时为 `null`）。两者分别报告，避免把控制通道错误误认为蓝牙断开。仅使用一只耳机也可以查看状态；另一只未报告电量时显示未知。
+
+`ears` 是协议中的主耳 / 次耳佩戴状态，不保证对应左耳 / 右耳；当前应用不会据此自动暂停播放。
 
 ## 聆听模式
 

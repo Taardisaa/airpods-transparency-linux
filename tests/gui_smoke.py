@@ -82,4 +82,11 @@ def test_overview_modes_and_presets_share_demo_state(monkeypatch):
     window.delete_profile()
     drain(app, window)
     assert window.profile_combo.count() == 0
+    window.update_overview({'connected': True, 'bluetooth_connected': True, 'mode': 'transparency',
+        'battery': {'right': {'percent': 100, 'charging': False}, 'left': {'percent': None}}})
+    assert '已连接' in window.connection_label.text()
+    assert window.battery_bars['right'].value() == 100
+    assert window.battery_bars['left'].format() == '未报告'
+    window.update_overview({'connected': False, 'bluetooth_connected': True, 'battery': {}})
+    assert '蓝牙已连接，控制通道不可用' in window.connection_label.text()
     window.close()
