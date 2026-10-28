@@ -134,7 +134,14 @@ airpods-control preset save "Office" --mac AA:BB:CC:DD:EE:FF --json
 airpods-control doctor --mac AA:BB:CC:DD:EE:FF --json
 ```
 
-保留默认的自动连接方式即可。仍然失败时，可重新连接耳机，并检查 `~/.local/state/airpods-transparency/service.log`。
+保持默认的 `auto` 传输方式。若出现 `Connection refused`、`Not connected` 或 `ATT error: 0x0e`，可点击界面的“重新连接”，或运行：
+
+```bash
+airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
+airpods-control read --mac AA:BB:CC:DD:EE:FF --json
+```
+
+重连会短暂中断这副耳机的音频，保留配对和声音参数。它重新建立音频与控制连接；不保证修复所有固件或权限问题。仍然失败时，检查 `~/.local/state/airpods-transparency/service.log`。
 
 **修改了参数，为什么声音没变化？**
 

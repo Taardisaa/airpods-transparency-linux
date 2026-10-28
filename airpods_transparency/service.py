@@ -135,6 +135,15 @@ class Engine:
         if action == "mode":
             return self.session(mac).mode(request["mode"])
         with self.settings_lock:
+            if action == "reconnect":
+                # Close our channel before resetting Bluetooth. No settings
+                # writes, unpairing, or adapter-wide changes are involved.
+                from .bluez import reconnect_audio
+                with self.session_lock:
+                    session = self.sessions.pop(mac, None)
+                    if session:
+                        session.close()
+                    return reconnect_audio(mac)
             controller = Controller(mac, transport=request.get("transport", "auto"))
             if action == "read":
                 return {"raw_hex": controller.read().raw.hex(), "backend": controller.backend}

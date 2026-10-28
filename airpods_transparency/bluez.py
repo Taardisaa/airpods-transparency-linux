@@ -61,6 +61,23 @@ def device_connected(mac):
     return any(property_value(path, "org.bluez.Device1", "Connected") for path in device_paths(mac))
 
 
+def reconnect_audio(mac):
+    """Reset this device's channels, then connect its A2DP sink profile only.
+
+    Explicit user action: audio pauses briefly. Never called as a side effect of
+    reading settings, and never removes pairing or restarts the adapter.
+    """
+    paths = device_paths(mac)
+    if len(paths) != 1:
+        raise ValueError("Expected one paired AirPods device on one adapter")
+    path = paths[0]
+    if property_value(path, "org.bluez.Device1", "Connected"):
+        bus_call(path, "org.bluez.Device1", "Disconnect")
+    bus_call(path, "org.bluez.Device1", "ConnectProfile", "s",
+             "0000110b-0000-1000-8000-00805f9b34fb")
+    return {"bluetooth_connected": device_connected(mac), "profile": "a2dp_sink"}
+
+
 def find_transparency_targeted(mac):
     candidates = []
     for device in device_paths(mac):
@@ -145,35 +162,29 @@ class SettingsClient:
         self.backend = None
 
     def __enter__(self):
-        characteristic = None
-        if self.transport != "att":
-            try:
-                characteristic = find_transparency(self.mac)
-            except (OSError, RuntimeError, subprocess.SubprocessError):
-                if self.transport == "bluez":
-                    raise
-        if characteristic or self.transport == "bluez":
-            self.client = BlueZClient(self.mac, characteristic)
-            self.backend = "bluez"
-        else:
+        # Cached characteristic objects do not prove BlueZ has a usable GATT
+        # link. The direct BR/EDR channel can work while ReadValue fails.
+        if self.transport != "bluez":
             self.client = ATTClient(self.mac)
-            self.backend = "att"
-        try:
-            self.client.__enter__()
-        except ConnectionRefusedError as original:
-            # Services can appear between discovery and connect. Retry discovery,
-            # not a write; never retry writes through a second transport.
-            if self.transport != "auto":
-                raise
+            try:
+                self.client.__enter__()
+            except ConnectionRefusedError as original:
+                if self.transport == "att":
+                    raise
+                characteristic = find_transparency(self.mac)
+                if not characteristic:
+                    raise ConnectionRefusedError(
+                        "ATT connection refused and BlueZ has no discovered transparency service. "
+                        "Use reconnect --mac ADDRESS to reconnect the audio profile, then retry."
+                    ) from original
+            else:
+                self.backend = "att"
+                return self
+        else:
             characteristic = find_transparency(self.mac)
-            if not characteristic:
-                raise ConnectionRefusedError(
-                    "ATT connection refused and BlueZ has no discovered transparency service. "
-                    "Reconnect AirPods, then retry; use doctor --json for diagnostics."
-                ) from original
-            self.client = BlueZClient(self.mac, characteristic)
-            self.backend = "bluez"
-            self.client.__enter__()
+        self.client = BlueZClient(self.mac, characteristic)
+        self.client.__enter__()
+        self.backend = "bluez"
         return self
 
     def __exit__(self, *args):

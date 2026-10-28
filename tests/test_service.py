@@ -78,3 +78,20 @@ def test_preset_reports_partial_failure_with_backup(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "session", lambda mac: FakeSession())
     with pytest.raises(RuntimeError, match="Transparency settings applied.*original.json"):
         engine.dispatch({"action": "preset_apply", "mac": "AA:BB:CC:DD:EE:FF", "name": "Office"})
+
+
+def test_reconnect_closes_control_session_before_reset_and_does_not_write(tmp_path, monkeypatch):
+    from airpods_transparency import bluez
+    from airpods_transparency.profiles import ProfileStore
+    calls = []
+    mac = "AA:BB:CC:DD:EE:FF"
+    class Session:
+        def close(self):
+            calls.append("close")
+    engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    engine.sessions[mac] = Session()
+    monkeypatch.setattr(bluez, "reconnect_audio", lambda address: calls.append(address) or {"bluetooth_connected": True})
+    monkeypatch.setattr(service, "Controller", lambda *args, **kwargs: pytest.fail("must not write settings"))
+    assert engine.dispatch({"action": "reconnect", "mac": mac}) == {"bluetooth_connected": True}
+    assert calls == ["close", mac]
+    assert not engine.sessions

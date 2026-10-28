@@ -69,6 +69,11 @@ class Window(QtWidgets.QWidget):
         self.load_button = QtWidgets.QPushButton("读取设置")
         self.load_button.clicked.connect(self.load)
         row.addWidget(self.load_button)
+        self.reconnect_button = QtWidgets.QPushButton("重新连接")
+        self.reconnect_button.setToolTip("重建音频和控制连接，声音会短暂中断。保留配对和已保存的声音参数。")
+        self.reconnect_button.clicked.connect(self.reconnect)
+        self.reconnect_button.setEnabled(not demo)
+        row.addWidget(self.reconnect_button)
         layout.addLayout(row)
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs)
@@ -468,6 +473,7 @@ class Window(QtWidgets.QWidget):
         self.set_loaded(False)
         self.find_button.setEnabled(False)
         self.load_button.setEnabled(False)
+        self.reconnect_button.setEnabled(False)
         self.address.setEnabled(False)
         self.status.setText(message)
         self.pending = (self.pool.submit(work), callback)
@@ -482,6 +488,7 @@ class Window(QtWidgets.QWidget):
         self.pending = None
         self.find_button.setEnabled(not self.demo)
         self.load_button.setEnabled(True)
+        self.reconnect_button.setEnabled(not self.demo)
         self.address.setEnabled(not self.demo)
         try:
             callback(future.result())
@@ -518,6 +525,20 @@ class Window(QtWidgets.QWidget):
         self.loaded = None
         self.refresh_overview()
         self.run(self.controller.read, self.populate, "读取通透参数…", "声音参数暂不可用（不代表蓝牙未连接）")
+
+    def reconnect(self):
+        try:
+            mac = normalize_mac(self.address.text().strip())
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        self.loaded = None
+        self.controller = Controller(mac, transport=self.transport)
+        def work():
+            rpc("reconnect", mac)
+            return self.controller.read()
+        self.run(work, self.populate, "重新建立音频和控制连接，声音会短暂中断…",
+                 "重连或读取失败，请检查系统蓝牙连接后重试")
 
     def populate(self, settings):
         self.loaded = settings

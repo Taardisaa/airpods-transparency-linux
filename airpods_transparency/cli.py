@@ -43,8 +43,9 @@ def parser(json_errors=False):
     gui.add_argument("--demo", action="store_true", help="Simulated device; no Bluetooth access")
     gui.add_argument("--transport", choices=["auto", "bluez", "att"], default="auto")
     gui.add_argument("--tray", action="store_true", help="Start minimized to the tray when available")
-    for name in ("status", "watch", "mode"):
-        cmd = commands.add_parser(name)
+    for name in ("status", "watch", "mode", "reconnect"):
+        cmd = commands.add_parser(name, **({"help": "Reconnect audio and control channels (brief audio interruption)"}
+                                          if name == "reconnect" else {}))
         cmd.add_argument("--mac", required=True, type=normalize_mac)
         cmd.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
         if name == "mode":
@@ -151,7 +152,7 @@ def main(argv=None):
             print(json.dumps(rpc("shutdown" if args.operation == "stop" else "ping",
                                  start=args.operation == "start"), indent=2))
             return 0
-        if args.command in ("status", "mode"):
+        if args.command in ("status", "mode", "reconnect"):
             print(json.dumps(rpc(args.command, args.mac, **({"mode": args.value} if args.command == "mode" else {})), indent=2))
             return 0
         if args.command == "watch":

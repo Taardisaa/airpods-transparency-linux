@@ -11,12 +11,14 @@ airpods-control devices --json
 airpods-control status --mac AA:BB:CC:DD:EE:FF --json
 airpods-control watch --mac AA:BB:CC:DD:EE:FF --interval 2 --json
 airpods-control doctor --mac AA:BB:CC:DD:EE:FF --json
+airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
 ```
 
 - `devices`：列出 BlueZ 中已知、名称含 AirPods 的设备；配对请使用系统蓝牙设置。
 - `status`：电量、模式、型号、固件及控制连接状态。未报告的电量为 `null`。
 - `watch`：有变化时输出一行 JSON，Ctrl+C 结束。轮询间隔可设为 0.2～60 秒。
 - `doctor`：诊断配对、连接、DeviceID、后台服务和声音参数访问。
+- `reconnect`：关闭应用的控制通道，断开这副耳机并重新连接 A2DP 音频，再由应用恢复控制通道。音频会短暂中断；保留配对与声音参数，不重启整个蓝牙适配器。完成后用 `read` 验证参数访问。
 
 `connected` 表示 AirPods 控制通道状态，`bluetooth_connected` 表示 BlueZ 报告的蓝牙连接状态（检查失败时为 `null`）。两者分别报告，避免把控制通道错误误认为蓝牙断开。仅使用一只耳机也可以查看状态；另一只未报告电量时显示未知。
 
@@ -124,7 +126,7 @@ airpods-control service stop --json
 
 `read` 的 JSON 结果还包含实际使用的 `backend` 和 `values`。`doctor` 失败时会保留已完成的诊断信息。设备状态中的 `error` 可以描述控制通道断开；这不等同于状态查询请求本身失败。
 
-`read`、`set`、`backup`、`restore`、`doctor`、`preset` 和 `gui` 支持 `--transport auto|bluez|att`。通常保持 `auto`；只有排查传输问题时才需要指定。BlueZ 已接管 ATT 时，强制使用 `att` 可能返回连接拒绝。
+`read`、`set`、`backup`、`restore`、`doctor`、`preset` 和 `gui` 支持 `--transport auto|bluez|att`。`auto` 优先打开直接 ATT 通道；若通道被拒绝，再使用 BlueZ 已发现的 GATT 特征。不会因读取失败自动断开音频或重试写入。通常保持 `auto`；BlueZ 已接管 ATT 时，强制使用 `att` 可能返回连接拒绝。
 
 ## 文件位置
 

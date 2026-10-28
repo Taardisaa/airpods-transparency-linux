@@ -26,7 +26,8 @@ def test_discover_by_device_and_uuid_not_path_number(monkeypatch):
     assert bluez.find_transparency(MAC) is None
 
 
-def test_auto_prefers_existing_bluez_connection_and_no_cached_read(monkeypatch):
+def test_auto_uses_bluez_when_direct_channel_is_owned(monkeypatch):
+    refuse_att(monkeypatch)
     calls = []
     def call(path, interface, method, *args):
         calls.append((path, method, args))
@@ -58,8 +59,7 @@ def test_read_only_characteristic_never_written(monkeypatch):
 
 
 def test_att_fallback_and_discovery_race(monkeypatch):
-    discovered = iter([None, (PATH, ["read"])])
-    monkeypatch.setattr(bluez, "find_transparency", lambda mac: next(discovered))
+    monkeypatch.setattr(bluez, "find_transparency", lambda mac: (PATH, ["read"]))
     class Refused:
         def __init__(self, mac):
             pass
@@ -78,6 +78,7 @@ def test_busctl_failure_is_actionable(monkeypatch):
 
 
 def test_multiple_adapters_fail_closed(monkeypatch):
+    refuse_att(monkeypatch)
     response = objects()
     response["data"][0].update(objects(PATH.replace("hci1", "hci0"))["data"][0])
     monkeypatch.setattr(bluez, "bus_call", lambda *args: response)
@@ -110,3 +111,48 @@ def test_targeted_connection_check_reports_disconnected(monkeypatch):
     monkeypatch.setattr(bluez, 'device_paths', lambda mac: [PATH.split('/service')[0]])
     monkeypatch.setattr(bluez, 'property_value', lambda *args: False)
     assert bluez.device_connected(MAC) is False
+
+
+def refuse_att(monkeypatch):
+    class Refused:
+        def __init__(self, mac):
+            pass
+        def __enter__(self):
+            raise ConnectionRefusedError(111, "owned")
+    monkeypatch.setattr(bluez, "ATTClient", Refused)
+
+
+def test_auto_uses_direct_channel_despite_cached_bluez_characteristic(monkeypatch):
+    class Direct:
+        def __init__(self, mac):
+            pass
+        def __enter__(self):
+            return self
+        def read(self):
+            return RAW
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setattr(bluez, "ATTClient", Direct)
+    monkeypatch.setattr(bluez, "find_transparency", lambda mac: pytest.fail("cached paths must not override working ATT"))
+    with bluez.SettingsClient(MAC) as client:
+        assert client.backend == "att"
+        assert client.read() == RAW
+
+
+def test_reconnect_only_resets_selected_device_and_connects_audio(monkeypatch):
+    device = PATH.split('/service')[0]
+    calls = []
+    monkeypatch.setattr(bluez, "device_paths", lambda mac: [device])
+    monkeypatch.setattr(bluez, "property_value", lambda *args: True)
+    monkeypatch.setattr(bluez, "bus_call", lambda *args: calls.append(args))
+    assert bluez.reconnect_audio(MAC) == {"bluetooth_connected": True, "profile": "a2dp_sink"}
+    assert calls == [(device, "org.bluez.Device1", "Disconnect"),
+                     (device, "org.bluez.Device1", "ConnectProfile", "s",
+                      "0000110b-0000-1000-8000-00805f9b34fb")]
+
+
+def test_reconnect_rejects_ambiguous_device_before_disconnect(monkeypatch):
+    monkeypatch.setattr(bluez, "device_paths", lambda mac: ["one", "two"])
+    monkeypatch.setattr(bluez, "bus_call", lambda *args: pytest.fail("must not disconnect"))
+    with pytest.raises(ValueError, match="one adapter"):
+        bluez.reconnect_audio(MAC)
