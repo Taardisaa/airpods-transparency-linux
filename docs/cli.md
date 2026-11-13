@@ -22,6 +22,8 @@ airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
 
 `connected` 表示 AirPods 控制通道状态，`bluetooth_connected` 表示 BlueZ 报告的蓝牙连接状态（检查失败时为 `null`）。两者分别报告，避免把控制通道错误误认为蓝牙断开。仅使用一只耳机也可以查看状态；另一只未报告电量时显示未知。
 
+`firmware` 优先显示设备信息中的市场固件版本（例如 `8B34`），`firmware_raw` 是对应的协议整数编码。旧设备未提供该字段时，`firmware` 回退到组件版本字符串，`firmware_raw` 为 `null`。
+
 `ears` 是协议中的主耳 / 次耳佩戴状态，不保证对应左耳 / 右耳；当前应用不会据此自动暂停播放。
 
 ## 聆听模式

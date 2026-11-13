@@ -65,3 +65,27 @@ def test_mode_failure_is_not_reported_as_success(monkeypatch):
     monkeypatch.setattr(client, "pump", lambda *args: False)
     with pytest.raises(RuntimeError, match="not acknowledged"):
         client.set_mode("adaptive")
+
+
+@pytest.mark.parametrize('raw,expected', [(b'8454688', '8B34'), (b'9442752', '9A348'),
+                                          (b'8454371', '8B14c')])
+def test_marketing_firmware_uses_packed_field_not_component_string(raw, expected):
+    client = AACPClient(MAC)
+    fields = [b'AirPods', b'A3063', b'Apple', b'PRIVATE-SERIAL',
+              b'81.2675000075000000.6589', b'81.2675', b'1.0.0',
+              b'updater', b'LEFT-PRIVATE', b'RIGHT-PRIVATE', raw]
+    client.parse(PREFIX + bytes.fromhex('1d000200000400') + b'\0'.join(fields) + b'\0')
+    state = client.snapshot()
+    assert state['firmware'] == expected
+    assert state['firmware_raw'] == int(raw)
+    assert 'PRIVATE' not in str(state)
+
+
+@pytest.mark.parametrize('raw', [b'', b'not-a-version', b'4294967296', b'0', b'1'])
+def test_invalid_marketing_version_preserves_legacy_component_fallback(raw):
+    client = AACPClient(MAC)
+    fields = [b'AirPods', b'A3063', b'Apple', b'PRIVATE-SERIAL', b'81.2',
+              b'', b'', b'', b'', b'', raw]
+    client.parse(PREFIX + bytes.fromhex('1d000200000400') + b'\0'.join(fields) + b'\0')
+    assert client.state['firmware'] == '81.2'
+    assert client.state['firmware_raw'] is None

@@ -12,12 +12,33 @@ PARTS = {4: "left", 2: "right", 8: "case"}
 PREFIX = bytes.fromhex("04000400")
 
 
+def marketing_firmware(raw):
+    """Decode the packed marketing version in device-info field 10.
+
+    Confirmed against this Pro 3's 8454688 -> 8B34 and its macOS device
+    record. Field 4 is an internal component version, e.g. 81.2675... .
+    """
+    if not raw.isdigit() or len(raw) > 10:
+        return None
+    version = int(raw)
+    if not 0 < version <= 0xFFFFFFFF:
+        return None
+    major = version >> 20
+    if not major:
+        return None
+    letter = chr(ord("A") + ((version >> 16) & 15))
+    build = (version >> 4) & 0xFFF
+    suffix = version & 15
+    return f"{major}{letter}{build}" + (chr(ord("a") + suffix - 1) if suffix else "")
+
+
 class AACPClient:
     def __init__(self, mac):
         self.mac = normalize_mac(mac)
         self.sock = None
         self.state = {"connected": False, "mode": None, "battery": {}, "ears": None,
-                      "name": None, "model": None, "firmware": None, "updated_at": None}
+                      "name": None, "model": None, "firmware": None,
+                      "firmware_raw": None, "updated_at": None}
 
     def connect(self):
         self.close()
@@ -73,6 +94,12 @@ class AACPClient:
                 # Deliberately omit serial numbers and raw metadata from status.
                 for name, index in (("name", 0), ("model", 1), ("firmware", 4)):
                     self.state[name] = fields[index].decode("utf-8", "replace")[:128]
+                self.state["firmware_raw"] = None
+                if len(fields) > 10:
+                    firmware = marketing_firmware(fields[10])
+                    if firmware:
+                        self.state["firmware"] = firmware
+                        self.state["firmware_raw"] = int(fields[10])
                 changed = True
         if changed:
             self.state["updated_at"] = time.time()
