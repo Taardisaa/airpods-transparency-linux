@@ -15,6 +15,19 @@
 
 目前主要在 **Ubuntu 22.04 + AirPods Pro 3** 上验证。其他型号和固件的功能支持可能不同。仅使用一只耳机时也可查看连接状态与已报告的电量；未报告的耳机或充电盒电量显示“未报告”。
 
+## Limitation
+
+**高级声音调节目前为实验性功能。** 在实测的 AirPods Pro 3 上，打开高级 ATT 通道后约 30 秒，耳机会主动断开整条蓝牙连接。抓包确认断开来自耳机端；保持通道和延长重连超时仍无法消除这一问题。[上游 Linux 实现也记录了短时断连](https://github.com/librepods-org/librepods/blob/89356c08cea3db0b6b54792d9329d09a87cc85fa/linux/README.md#troubleshooting)。完整的苹果主机协议兼容尚未实现。
+
+声音参数可以在连接期间写入并读回验证。完成调节后，建议移除本工具设置的 Apple DeviceID 覆盖，恢复日常音频使用：
+
+```bash
+sudo python3 tools/configure_bluez.py --disable
+sudo systemctl restart bluetooth
+```
+
+`--disable` 只移除本工具使用的 Apple DeviceID 值，并备份修改前配置。随后在系统蓝牙设置中重新连接耳机。再次调节高级参数时需要重新启用覆盖；高级调节的长期稳定性尚未通过验证。
+
 ## 安装
 
 需要 Python 3.10+、BlueZ，以及 systemd 提供的 `busctl`。耳机需先通过系统蓝牙设置配对并连接。
@@ -50,7 +63,7 @@ python tools/install_desktop.py
 
 ### 启用自定义通透调节
 
-部分 AirPods 设置要求电脑报告苹果的蓝牙 DeviceID。使用声音调节前，建议完成这项一次性配置：
+部分 AirPods 设置要求电脑报告苹果的蓝牙 DeviceID。临时启用高级声音调节时，执行：
 
 ```bash
 sudo python3 tools/configure_bluez.py --enable

@@ -19,3 +19,12 @@ def test_config_edit_is_scoped_and_idempotent():
 def test_missing_section_and_missing_key():
     assert config.VALUE in config.edit("[Policy]\nAutoEnable=true")
     assert config.edit("[General]\n[Policy]\n").index(config.VALUE) < config.edit("[General]\n[Policy]\n").index("[Policy]")
+
+
+def test_disable_removes_only_our_override_and_preserves_other_configuration():
+    original = '[General]\nName = PC\nDeviceID = bluetooth:004C:0000:0000\n[Policy]\nDeviceID = bluetooth:004C:0000:0000\n'
+    expected = '[General]\nName = PC\n[Policy]\nDeviceID = bluetooth:004C:0000:0000\n'
+    assert config.disable(original) == expected
+    assert config.disable(expected) == expected
+    custom = '[General]\nDeviceID = usb:1234:5678:0000\n'
+    assert config.disable(custom) == custom

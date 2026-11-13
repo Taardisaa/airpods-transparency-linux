@@ -41,10 +41,25 @@ def edit(text):
     return "".join(result)
 
 
+def disable(text):
+    section = None
+    result = []
+    for line in text.splitlines(keepends=True):
+        match = re.match(r"\s*\[([^]]+)\]", line)
+        if match:
+            section = match.group(1).strip().lower()
+        if section == "general" and re.fullmatch(
+                r"\s*DeviceID\s*=\s*bluetooth:004c:0000:0000\s*(?:#.*)?", line, re.I):
+            continue
+        result.append(line)
+    return "".join(result)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     options = p.add_mutually_exclusive_group(required=True)
     options.add_argument("--enable", action="store_true")
+    options.add_argument("--disable", action="store_true", help="Remove the Apple DeviceID override")
     options.add_argument("--restore", type=Path)
     args = p.parse_args()
     if os.geteuid() != 0:
@@ -53,7 +68,7 @@ def main():
         p.error(f"Expected a regular non-symlink configuration file: {CONFIG}")
     metadata = CONFIG.stat()
     before = CONFIG.read_bytes()
-    after = args.restore.read_bytes() if args.restore else edit(before.decode()).encode()
+    after = args.restore.read_bytes() if args.restore else (disable if args.disable else edit)(before.decode()).encode()
     if before == after:
         print("Configuration already matches. No changes.")
         return
