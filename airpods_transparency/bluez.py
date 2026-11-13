@@ -7,6 +7,7 @@ never by the generated object-path suffix or the cached Value property.
 import json
 import subprocess
 import re
+import time
 import xml.etree.ElementTree as ET
 
 from .transport import ATTClient, normalize_mac
@@ -15,11 +16,11 @@ TRANSPARENCY_UUID = "d5621cc1-f7ab-45db-9403-9eaf744d5390"
 CHARACTERISTIC = "org.bluez.GattCharacteristic1"
 
 
-def bus_call(path, interface, method, *arguments):
+def bus_call(path, interface, method, *arguments, timeout=8):
     result = subprocess.run(
-        ["busctl", "--system", "--json=short", "--timeout=8", "call", "org.bluez",
+        ["busctl", "--system", "--json=short", f"--timeout={timeout}", "call", "org.bluez",
          path, interface, method, *map(str, arguments)],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=timeout + 2,
     )
     if result.returncode:
         raise RuntimeError(f"BlueZ {method}: {result.stderr.strip() or 'D-Bus call failed'} (exit {result.returncode})")
@@ -61,7 +62,7 @@ def device_connected(mac):
     return any(property_value(path, "org.bluez.Device1", "Connected") for path in device_paths(mac))
 
 
-def reconnect_audio(mac):
+def reconnect_audio(mac, prepare=None):
     """Reset this device's channels, then connect its A2DP sink profile only.
 
     Explicit user action: audio pauses briefly. Never called as a side effect of
@@ -73,8 +74,21 @@ def reconnect_audio(mac):
     path = paths[0]
     if property_value(path, "org.bluez.Device1", "Connected"):
         bus_call(path, "org.bluez.Device1", "Disconnect")
+        deadline = time.monotonic() + 5
+        while property_value(path, "org.bluez.Device1", "Connected"):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("AirPods disconnection did not finish")
+            time.sleep(0.1)
+    preparation_error = None
+    if prepare:
+        try:
+            prepare()  # Keep ATT open before audio/GATT reconnect competes for it.
+        except Exception as exc:
+            preparation_error = exc
     bus_call(path, "org.bluez.Device1", "ConnectProfile", "s",
-             "0000110b-0000-1000-8000-00805f9b34fb")
+             "0000110b-0000-1000-8000-00805f9b34fb", timeout=25)
+    if preparation_error:
+        raise RuntimeError(f"Audio reconnected, but advanced settings are unavailable: {preparation_error}") from preparation_error
     return {"bluetooth_connected": device_connected(mac), "profile": "a2dp_sink"}
 
 

@@ -143,12 +143,13 @@ def test_reconnect_only_resets_selected_device_and_connects_audio(monkeypatch):
     device = PATH.split('/service')[0]
     calls = []
     monkeypatch.setattr(bluez, "device_paths", lambda mac: [device])
-    monkeypatch.setattr(bluez, "property_value", lambda *args: True)
-    monkeypatch.setattr(bluez, "bus_call", lambda *args: calls.append(args))
+    states = iter([True, False, True])
+    monkeypatch.setattr(bluez, "property_value", lambda *args: next(states))
+    monkeypatch.setattr(bluez, "bus_call", lambda *args, **kwargs: calls.append((args, kwargs)))
     assert bluez.reconnect_audio(MAC) == {"bluetooth_connected": True, "profile": "a2dp_sink"}
-    assert calls == [(device, "org.bluez.Device1", "Disconnect"),
-                     (device, "org.bluez.Device1", "ConnectProfile", "s",
-                      "0000110b-0000-1000-8000-00805f9b34fb")]
+    assert calls == [((device, "org.bluez.Device1", "Disconnect"), {}),
+                     ((device, "org.bluez.Device1", "ConnectProfile", "s",
+                      "0000110b-0000-1000-8000-00805f9b34fb"), {"timeout": 25})]
 
 
 def test_reconnect_rejects_ambiguous_device_before_disconnect(monkeypatch):
@@ -156,3 +157,16 @@ def test_reconnect_rejects_ambiguous_device_before_disconnect(monkeypatch):
     monkeypatch.setattr(bluez, "bus_call", lambda *args: pytest.fail("must not disconnect"))
     with pytest.raises(ValueError, match="one adapter"):
         bluez.reconnect_audio(MAC)
+
+
+def test_failed_advanced_prepare_still_restores_audio(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bluez, "device_paths", lambda mac: ["device"])
+    monkeypatch.setattr(bluez, "property_value", lambda *args: False)
+    monkeypatch.setattr(bluez, "bus_call", lambda *args, **kwargs: calls.append(args[2]))
+    def prepare():
+        calls.append("prepare")
+        raise ConnectionRefusedError("ATT busy")
+    with pytest.raises(RuntimeError, match="Audio reconnected.*ATT busy"):
+        bluez.reconnect_audio(MAC, prepare=prepare)
+    assert calls == ["prepare", "ConnectProfile"]

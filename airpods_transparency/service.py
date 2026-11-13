@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 
 from .aacp import AACPClient
 from .controller import Controller, save_backup
@@ -111,7 +112,45 @@ class Engine:
         self.sessions = {}
         self.session_lock = threading.Lock()
         self.settings_lock = threading.Lock()
+        self.settings_clients = {}
         self.profiles = profile_store or ProfileStore()
+
+    def drop_settings(self, mac):
+        client = self.settings_clients.pop(mac, None)
+        if client:
+            client.__exit__(None, None, None)
+
+    def prepare_settings(self, mac):
+        from .bluez import SettingsClient
+        client = SettingsClient(mac, "att")
+        client.__enter__()
+        try:
+            Settings(client.read())
+        except BaseException:
+            client.__exit__(None, None, None)
+            raise
+        self.settings_clients[mac] = client
+
+    @contextmanager
+    def settings_channel(self, mac, transport):
+        from .bluez import SettingsClient, device_connected
+        client = self.settings_clients.get(mac) if transport != "bluez" else None
+        if client is None:
+            if not device_connected(mac):
+                raise ConnectionError("AirPods are disconnected; connect them or use reconnect before reading settings")
+            client = SettingsClient(mac, transport)
+            client.__enter__()
+            if client.backend == "att":
+                self.settings_clients[mac] = client
+        try:
+            yield client
+        except BaseException:
+            if self.settings_clients.get(mac) is client:
+                self.drop_settings(mac)
+            raise  # Never replay a write after a connection failure.
+        finally:
+            if client.backend != "att":
+                client.__exit__(None, None, None)
 
     def session(self, mac):
         with self.session_lock:
@@ -143,8 +182,16 @@ class Engine:
                     session = self.sessions.pop(mac, None)
                     if session:
                         session.close()
-                    return reconnect_audio(mac)
-            controller = Controller(mac, transport=request.get("transport", "auto"))
+                    self.drop_settings(mac)
+                    result = reconnect_audio(mac, prepare=lambda: self.prepare_settings(mac))
+                    try:
+                        Settings(self.settings_clients[mac].read())
+                    except Exception:
+                        self.drop_settings(mac)
+                        raise
+                    return {**result, "settings_ready": True, "backend": "att"}
+            transport = request.get("transport", "auto")
+            controller = Controller(mac, factory=lambda address: self.settings_channel(address, transport))
             if action == "read":
                 return {"raw_hex": controller.read().raw.hex(), "backend": controller.backend}
             if action == "backup":
@@ -174,6 +221,8 @@ class Engine:
     def close(self):
         for session in self.sessions.values():
             session.close()
+        for mac in list(self.settings_clients):
+            self.drop_settings(mac)
 
 
 class Server(socketserver.ThreadingUnixStreamServer):
@@ -247,7 +296,7 @@ def rpc(action, mac=None, start=True, **params):
     if mac:
         request["mac"] = normalize_mac(mac)
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(45)
+    client.settimeout(90)
     try:
         try:
             client.connect(str(path))

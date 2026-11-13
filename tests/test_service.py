@@ -90,8 +90,60 @@ def test_reconnect_closes_control_session_before_reset_and_does_not_write(tmp_pa
             calls.append("close")
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
     engine.sessions[mac] = Session()
-    monkeypatch.setattr(bluez, "reconnect_audio", lambda address: calls.append(address) or {"bluetooth_connected": True})
+    monkeypatch.setattr(bluez, "reconnect_audio", lambda address, prepare: (prepare(), calls.append(address), {"bluetooth_connected": True})[-1])
+    def prepare(address):
+        import struct
+        from types import SimpleNamespace
+        calls.append("prepare")
+        engine.settings_clients[address] = SimpleNamespace(read=lambda: struct.pack("<26f", *([1] + [0] * 25)))
+    monkeypatch.setattr(engine, "prepare_settings", prepare)
     monkeypatch.setattr(service, "Controller", lambda *args, **kwargs: pytest.fail("must not write settings"))
-    assert engine.dispatch({"action": "reconnect", "mac": mac}) == {"bluetooth_connected": True}
-    assert calls == ["close", mac]
+    assert engine.dispatch({"action": "reconnect", "mac": mac}) == {"bluetooth_connected": True, "settings_ready": True, "backend": "att"}
+    assert calls == ["close", "prepare", mac]
     assert not engine.sessions
+
+
+def test_direct_settings_channel_survives_requests_and_is_dropped_on_failure(tmp_path, monkeypatch):
+    import struct
+    from airpods_transparency import bluez
+    from airpods_transparency.profiles import ProfileStore
+    raw = struct.pack("<26f", *([1] + [0] * 25))
+    opened, closed = [], []
+    class Client:
+        backend = "att"
+        failed = False
+        def __init__(self, *args):
+            opened.append(self)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            closed.append(self)
+        def read(self):
+            if self.failed:
+                raise ConnectionResetError("link dropped")
+            return raw
+    monkeypatch.setattr(bluez, "SettingsClient", Client)
+    monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
+    engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    request = {"action": "read", "mac": "AA:BB:CC:DD:EE:FF"}
+    assert engine.dispatch(request)["raw_hex"] == raw.hex()
+    assert engine.dispatch(request)["raw_hex"] == raw.hex()
+    assert len(opened) == 1 and not closed
+    opened[0].failed = True
+    with pytest.raises(ConnectionResetError):
+        engine.dispatch(request)
+    assert closed == opened and not engine.settings_clients
+    engine.dispatch(request)
+    assert len(opened) == 2
+    engine.close()
+    assert closed == opened
+
+
+def test_offline_read_never_opens_bluetooth_connection(tmp_path, monkeypatch):
+    from airpods_transparency import bluez
+    from airpods_transparency.profiles import ProfileStore
+    monkeypatch.setattr(bluez, "device_connected", lambda mac: False)
+    monkeypatch.setattr(bluez, "SettingsClient", lambda *args: pytest.fail("must not connect offline device"))
+    engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    with pytest.raises(ConnectionError, match="disconnected"):
+        engine.dispatch({"action": "read", "mac": "AA:BB:CC:DD:EE:FF"})
