@@ -129,7 +129,7 @@ airpods-control service stop --json
 
 `read` 的 JSON 结果还包含实际使用的 `backend` 和 `values`。`doctor` 失败时会保留已完成的诊断信息。设备状态中的 `error` 可以描述控制通道断开；这不等同于状态查询请求本身失败。
 
-`read`、`set`、`backup`、`restore`、`doctor`、`preset` 和 `gui` 支持 `--transport auto|bluez|att`。`auto` 优先打开直接 ATT 通道；若通道被拒绝，再使用 BlueZ 已发现的 GATT 特征。不会因读取失败自动断开音频或重试写入。通常保持 `auto`；BlueZ 已接管 ATT 时，强制使用 `att` 可能返回连接拒绝。
+`read`、`set`、`backup`、`restore`、`doctor`、`preset` 和 `gui` 支持 `--transport auto|bluez|att`。`auto` 优先打开直接 ATT 通道；若通道被拒绝，再使用 BlueZ 已发现的 GATT 特征。直接 ATT 通道仅在本次操作内保持打开，读回完成后即释放给 BlueZ。写入后若仍读到完整原值，服务最多再读取四次，每次间隔 100 毫秒；收到不同的参数或连接错误时立即报告。每次修改只发一次写入。通常保持 `auto`；BlueZ 已接管 ATT 时，强制使用 `att` 可能返回连接拒绝。
 
 ## 文件位置
 

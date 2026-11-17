@@ -1,6 +1,7 @@
 """Backup-before-write and readback verification shared by CLI and GUI."""
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,13 @@ class Controller:
             try:
                 client.write(target.raw)
                 observed = Settings(client.read())
+                # A write without response may still expose the old value on the
+                # next read. Only poll while those exact pre-write bytes remain.
+                for _ in range(4):
+                    if observed.raw != current.raw:
+                        break
+                    time.sleep(0.1)
+                    observed = Settings(client.read())
                 if observed.raw != target.raw:
                     raise RuntimeError("Readback differs from requested settings")
             except Exception as exc:

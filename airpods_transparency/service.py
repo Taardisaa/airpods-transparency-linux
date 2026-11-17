@@ -162,8 +162,6 @@ class Engine:
                 raise ConnectionError("AirPods are disconnected; connect them or use reconnect before reading settings")
             client = SettingsClient(mac, transport)
             client.__enter__()
-            if client.backend == "att":
-                self.settings_clients[mac] = client
         try:
             yield client
         except BaseException:

@@ -179,3 +179,33 @@ def test_address_validation():
     for bad in ("--help", "AA:BB", MAC + "; cmd", "AA-BB-CC-DD-EE-FF"):
         with pytest.raises(ValueError):
             normalize_mac(bad)
+
+
+@pytest.mark.parametrize("first_value", ["stale", "different", "disconnected"])
+def test_post_write_verification_only_polls_the_prewrite_value(tmp_path, monkeypatch, first_value):
+    original = payload()
+    client = FakeClient(original, tmp_path)
+    target = Settings(original).edited({"left_tone": -0.1}).raw
+    another = Settings(original).edited({"right_tone": 0.1}).raw
+    polls = []
+    monkeypatch.setattr("airpods_transparency.controller.time.sleep", polls.append)
+    reads = iter([original, original, original, target] if first_value == "stale" else [original, another])
+
+    def read():
+        value = next(reads)
+        if first_value == "disconnected" and value == another:
+            raise ConnectionResetError("peer disconnected")
+        return value
+
+    client.read = read
+    controller = Controller(MAC, tmp_path, factory=lambda mac: client)
+    if first_value == "stale":
+        observed, backup = controller.apply({"left_tone": -0.1})
+        assert observed.raw == target and load_backup(backup, MAC).raw == original
+        assert polls == [0.1, 0.1]
+    else:
+        message = "peer disconnected" if first_value == "disconnected" else "Readback differs"
+        with pytest.raises(RuntimeError, match=message):
+            controller.apply({"left_tone": -0.1})
+        assert not polls
+    assert client.writes == [target]

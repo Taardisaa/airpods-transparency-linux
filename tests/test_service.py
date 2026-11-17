@@ -109,7 +109,7 @@ def test_reconnect_closes_control_session_before_reset_and_does_not_write(tmp_pa
     assert not engine.sessions
 
 
-def test_direct_settings_channel_survives_requests_and_is_dropped_on_failure(tmp_path, monkeypatch):
+def test_explicit_att_channel_is_released_on_success_and_failure(tmp_path, monkeypatch):
     import struct
     from airpods_transparency import bluez
     from airpods_transparency.profiles import ProfileStore
@@ -131,16 +131,17 @@ def test_direct_settings_channel_survives_requests_and_is_dropped_on_failure(tmp
     monkeypatch.setattr(bluez, "SettingsClient", Client)
     monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
-    request = {"action": "read", "mac": "AA:BB:CC:DD:EE:FF"}
+    request = {"action": "read", "mac": "AA:BB:CC:DD:EE:FF", "transport": "att"}
     assert engine.dispatch(request)["raw_hex"] == raw.hex()
     assert engine.dispatch(request)["raw_hex"] == raw.hex()
-    assert len(opened) == 1 and not closed
-    opened[0].failed = True
+    assert len(opened) == 2 and closed == opened
+    Client.failed = True
     with pytest.raises(ConnectionResetError):
         engine.dispatch(request)
     assert closed == opened and not engine.settings_clients
+    Client.failed = False
     engine.dispatch(request)
-    assert len(opened) == 2
+    assert len(opened) == 4
     engine.close()
     assert closed == opened
 
@@ -192,3 +193,43 @@ def test_handoff_releases_raw_before_bluez_read_and_reuses_bluez(monkeypatch):
     engine.close()
     assert events == [("open", "att"), ("read", "att"), ("close", "att"),
                       ("open", "bluez"), ("read", "bluez"), ("read", "bluez"), ("close", "bluez")]
+
+def test_auto_apply_releases_att_after_readback(tmp_path, monkeypatch):
+    import struct
+    from airpods_transparency import bluez
+    from airpods_transparency.profiles import ProfileStore
+
+    raw = struct.pack("<26f", *([1] + [0] * 25))
+    events = []
+
+    class Client:
+        backend = "att"
+
+        def __init__(self, address, transport):
+            assert transport == "auto"
+
+        def __enter__(self):
+            events.append("open")
+            return self
+
+        def read(self):
+            events.append("read")
+            return raw
+
+        def write(self, value):
+            nonlocal raw
+            events.append("write")
+            raw = value
+
+        def __exit__(self, *args):
+            events.append("close")
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setattr(bluez, "SettingsClient", Client)
+    monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
+    engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    response = engine.dispatch({"action": "apply", "mac": "AA:BB:CC:DD:EE:FF",
+                                "changes": {"left_amplification": -0.1}})
+    assert response["raw_hex"] == raw.hex()
+    assert events == ["open", "read", "write", "read", "close"]
+    assert not engine.settings_clients
