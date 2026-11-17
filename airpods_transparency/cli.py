@@ -79,6 +79,8 @@ def parser(json_errors=False):
                 cmd.add_argument(f"--{field}", **args)
                 for ear in ("left", "right"):
                     cmd.add_argument(f"--{ear}-{field}", **args)
+            cmd.add_argument("--sync-accommodation", action="store_true",
+                             help="Require a live accommodation report before writing; resend even if values already match")
             cmd.add_argument("--enabled", choices=["on", "off"])
             cmd.add_argument("--own-voice", type=float)
         if name == "restore":
@@ -195,6 +197,14 @@ def main(argv=None):
                 result["verified"] = True
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0
+        if args.command == "set" and args.sync_accommodation:
+            from .settings import Settings
+            result = rpc("apply_with_accommodation", args.mac, changes=collect_changes(args),
+                         transport=args.transport)
+            result["values"] = Settings(bytes.fromhex(result.pop("raw_hex"))).values()
+            result["readback_verified"] = True
+            print(json.dumps(result, indent=2))
+            return 0
         controller = Controller(args.mac, transport=args.transport)
         if args.command == "read":
             values = controller.read().values()
@@ -208,7 +218,8 @@ def main(argv=None):
                 changes=collect_changes(args) if args.command == "set" else None,
                 restore=args.file if args.command == "restore" else None)
             print(json.dumps({"ok": True, "backend": controller.backend,
-                              "verified": True, "backup": str(backup) if backup else None,
+                              "verified": True, "accommodation_sent": controller.accommodation_sent,
+                              "backup": str(backup) if backup else None,
                               "values": settings.values()}, indent=2))
         return 0
     except (OSError, ValueError, RuntimeError, ImportError, subprocess.SubprocessError) as exc:

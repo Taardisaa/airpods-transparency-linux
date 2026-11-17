@@ -89,3 +89,16 @@ def test_invalid_marketing_version_preserves_legacy_component_fallback(raw):
     client.parse(PREFIX + bytes.fromhex('1d000200000400') + b'\0'.join(fields) + b'\0')
     assert client.state['firmware'] == '81.2'
     assert client.state['firmware_raw'] is None
+
+
+def test_accommodation_report_is_scoped_to_connection_and_layout():
+    client = AACPClient(MAC)
+    packet = PREFIX + bytes.fromhex("5300840002000000") + bytes(range(128))
+    client.parse(packet)
+    assert client.accommodation == packet and client.snapshot()["accommodation_report_available"]
+    assert packet not in client.snapshot().values()
+    client.parse(packet[:-1])
+    assert client.accommodation is None
+    client.parse(packet)
+    client.close()
+    assert client.accommodation is None

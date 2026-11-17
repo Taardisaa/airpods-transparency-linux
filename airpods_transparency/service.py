@@ -256,14 +256,32 @@ class Engine:
                 values = controller.read().values()
                 return {"preset": self.profiles.save(request["name"], values,
                             state["mode"] if request.get("include_mode", True) and state["connected"] else None)}
-            if action in ("apply", "preset_apply"):
+            if action in ("apply", "apply_with_accommodation", "preset_apply"):
                 profile = self.profiles.get(request["name"]) if action == "preset_apply" else None
-                observed, backup = controller.apply(
-                    changes=profile["values"] if profile else request.get("changes"),
-                    restore=request.get("restore"),
-                    expected=Settings(bytes.fromhex(request["expected"])) if request.get("expected") else None)
+                required = action == "apply_with_accommodation"
+                session = self.session(mac)
+                session.ready.wait(6)
+                with session.lock:
+                    client = session.client
+                    try:
+                        available = client.sock is not None and client.pump(1, lambda: client.accommodation is not None)
+                    except OSError:
+                        available = False
+                    if required and not available:
+                        raise RuntimeError("No current AirPods accommodation report available")
+                    observed, backup = controller.apply(
+                        changes=profile["values"] if profile else request.get("changes"),
+                        restore=request.get("restore"),
+                        expected=Settings(bytes.fromhex(request["expected"])) if request.get("expected") else None)
+                    send_report = available and (backup is not None or required)
+                    if send_report:
+                        try:
+                            client.sock.sendall(client.accommodation)
+                        except OSError as exc:
+                            raise RuntimeError(f"Parameter readback matched, accommodation sync failed: {exc}. "
+                                               f"Backup: {backup}") from exc
                 result = {"raw_hex": observed.raw.hex(), "backup": str(backup) if backup else None,
-                          "backend": controller.backend}
+                          "accommodation_sent": send_report, "backend": controller.backend}
                 if profile and profile.get("mode"):
                     try:
                         self.session(mac).mode(profile["mode"])
@@ -394,16 +412,19 @@ class RemoteController:
         self.mac = normalize_mac(mac)
         self.transport = transport
         self.backend = None
+        self.accommodation_sent = False
 
     def read(self):
         result = rpc("read", self.mac, transport=self.transport)
         self.backend = result["backend"]
         return Settings(bytes.fromhex(result["raw_hex"]))
 
-    def apply(self, changes=None, restore=None, expected=None):
-        result = rpc("apply", self.mac, transport=self.transport, changes=changes,
+    def apply(self, changes=None, restore=None, expected=None, sync_accommodation=False):
+        action = "apply_with_accommodation" if sync_accommodation else "apply"
+        result = rpc(action, self.mac, transport=self.transport, changes=changes,
                      restore=str(restore) if restore else None, expected=expected.raw.hex() if expected else None)
         self.backend = result["backend"]
+        self.accommodation_sent = result.get("accommodation_sent", False)
         return Settings(bytes.fromhex(result["raw_hex"])), Path(result["backup"]) if result["backup"] else None
 
 

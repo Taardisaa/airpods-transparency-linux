@@ -133,3 +133,11 @@
 ```bash
 python tests/hardware_tuning.py --mac AA:BB:CC:DD:EE:FF
 ```
+
+## 2026-11-17 通透调节的听感问题
+
+同一副 Pro 3（8B34）在多次改变通透参数后，佩戴者反馈听不出环境声变化。操作前的备份显示两耳增音曾从 +0.353 调到 −1.000。随后实机读取显示自定义通透已开启，控制通道报告通透模式和双耳佩戴。音频连接正常和参数读回一致都不足以验收此问题。
+
+上游文档提到通透参数写入后发送 Headphone Accommodation 配置。上游 Android 应用的通透写入函数则只调用了 ATT 写入。本机在 AACP 连接中实际收到了 140 字节的辅助配置。应用会原样发送本次连接报告的兼容配置；在保持原有通透参数的测试中，套接字接受了发送，随后通透参数仍可读。发送成功本身不能证明固件将参数用于环境声处理。听感验收应在同一聆听模式和环境声下，比较两个增音值并恢复原设置。[上游协议](https://github.com/librepods-org/librepods/blob/89356c08cea3db0b6b54792d9329d09a87cc85fa/docs/AAP%20Definitions.md#customize-transparency-mode) · [上游写入实现](https://github.com/librepods-org/librepods/blob/89356c08cea3db0b6b54792d9329d09a87cc85fa/android/app/src/main/java/me/kavishdevar/librepods/data/Transparency.kt)
+
+随后在通透模式下进行了双耳增音试听，两档随机排序，各持续十秒，每段都核对了参数、模式和辅助配置发送结果。第一轮受音乐干扰，未计入。在有效的一轮中，佩戴者在揭示参数前选出第一段风扇声更小，第一段为 −1.000，第二段为 0.000。试后恢复并复读了原参数。这个对照只覆盖增音，未比较有无同步消息，也未测量声压差。

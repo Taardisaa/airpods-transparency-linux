@@ -157,3 +157,44 @@ def test_setup_populates_sliders_from_reconnected_device(monkeypatch):
     assert calls == ["setup", "reconnect"]
     assert window.loaded.raw == raw and window.sliders["left_amplification"].isEnabled()
     window.close()
+
+
+def test_sound_tab_shows_reported_mode_and_actual_sync_result(monkeypatch):
+    from airpods_transparency import gui
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = Window()
+    mac = "AA:BB:CC:DD:EE:FF"
+    window.address.setText(mac)
+    calls = []
+    raw = Settings(struct.pack("<26f", *([1] + [0] * 25)))
+
+    def rpc(action, *args, **kwargs):
+        return {"presets": {}} if action == "preset_list" else {"connected": True, "mode": "anc"}
+
+    class Controller:
+        backend = "att"
+        accommodation_sent = False
+        def __init__(self, mac, transport):
+            self.mac = mac
+        def read(self):
+            return raw
+        def apply(self, changes, **options):
+            calls.append(options)
+            return options["expected"].edited(changes), "original.json"
+
+    monkeypatch.setattr(gui, "rpc", rpc)
+    monkeypatch.setattr(gui, "Controller", Controller)
+    window.load()
+    drain(app, window)
+    assert "总览切到通透" in window.sound_mode.text()
+    window.controls["left_amplification"].setValue(-0.1)
+    window.apply()
+    drain(app, window)
+    assert "sync_accommodation" not in calls[-1]
+    assert "未同步辅助配置" in window.status.text()
+    window.controller.accommodation_sent = True
+    window.controls["left_amplification"].setValue(-0.2)
+    window.apply()
+    drain(app, window)
+    assert "已发送辅助配置" in window.status.text()
+    window.close()

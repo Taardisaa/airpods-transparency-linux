@@ -69,6 +69,10 @@ def test_preset_reports_partial_failure_with_backup(tmp_path, monkeypatch):
             return Settings(struct.pack("<26f", *([1] + [0] * 25))), Path("original.json")
     from pathlib import Path
     class FakeSession:
+        ready = service.threading.Event()
+        ready.set()
+        lock = service.threading.Lock()
+        client = type("Client", (), {"sock": None})()
         def mode(self, mode):
             raise RuntimeError("not acknowledged")
     store = ProfileStore(tmp_path)
@@ -232,6 +236,11 @@ def test_auto_apply_releases_att_after_readback(tmp_path, monkeypatch):
     monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
     monkeypatch.setattr(bluez, "stereo_connected", lambda mac: True)
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    from types import SimpleNamespace
+    ready = service.threading.Event()
+    ready.set()
+    session = SimpleNamespace(ready=ready, lock=service.threading.Lock(), client=SimpleNamespace(sock=None))
+    monkeypatch.setattr(engine, "session", lambda mac: session)
     response = engine.dispatch({"action": "apply", "mac": "AA:BB:CC:DD:EE:FF",
                                 "changes": {"left_amplification": -0.1}})
     assert response["raw_hex"] == raw.hex()
@@ -293,3 +302,42 @@ def test_settings_never_initiate_direct_att_before_stereo(monkeypatch, transport
             with channel:
                 pytest.fail("Direct ATT opened before stereo")
         assert not opened
+
+
+@pytest.mark.parametrize("action", ["apply", "apply_with_accommodation", "preset_apply"])
+def test_accommodation_sync_follows_verified_write(monkeypatch, tmp_path, action):
+    import struct
+    import threading
+    from types import SimpleNamespace
+    from airpods_transparency.settings import Settings
+
+    events = []
+    raw = Settings(struct.pack("<26f", *([1] + [0] * 25)))
+    report = bytes.fromhex("040004005300840002000000") + bytes(range(128))
+    class FakeController:
+        backend = "bluez"
+        def __init__(self, *args, **kwargs):
+            pass
+        def apply(self, **kwargs):
+            events.append("write/readback")
+            return raw, tmp_path / "original.json"
+    client = SimpleNamespace(sock=SimpleNamespace(sendall=events.append), accommodation=report,
+                             pump=lambda timeout, until: until())
+    session = SimpleNamespace(lock=threading.Lock(), ready=threading.Event(), client=client)
+    session.ready.set()
+    from airpods_transparency.profiles import ProfileStore
+    engine = service.Engine(profile_store=ProfileStore(tmp_path))
+    engine.profiles.save("Office", {"enabled": True}, None)
+    monkeypatch.setattr(engine, "session", lambda mac: session)
+    monkeypatch.setattr(service, "Controller", FakeController)
+    req = {"action": action, "name": "Office", "mac": "AA:BB:CC:DD:EE:FF", "changes": {"enabled": True}}
+    assert engine.dispatch(req)["accommodation_sent"]
+    assert events == ["write/readback", report]
+    client.accommodation = None
+    if action == "apply_with_accommodation":
+        with pytest.raises(RuntimeError, match="No current AirPods accommodation"):
+            engine.dispatch(req)
+        assert len(events) == 2
+    else:
+        assert not engine.dispatch(req)["accommodation_sent"]
+        assert events[-1] == "write/readback"

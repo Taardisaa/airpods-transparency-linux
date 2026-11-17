@@ -36,6 +36,7 @@ class AACPClient:
     def __init__(self, mac):
         self.mac = normalize_mac(mac)
         self.sock = None
+        self.accommodation = None
         self.state = {"connected": False, "mode": None, "battery": {}, "ears": None,
                       "name": None, "model": None, "firmware": None,
                       "firmware_raw": None, "updated_at": None}
@@ -60,10 +61,16 @@ class AACPClient:
         if self.sock:
             self.sock.close()
             self.sock = None
+        self.accommodation = None
         self.state["connected"] = False
 
     def parse(self, packet):
         changed = False
+        if packet.startswith(PREFIX + b"\x53\x00"):
+            # Only replay a complete v2 configuration received on this connection.
+            self.accommodation = (bytes(packet) if len(packet) == 140 and
+                                  packet[6:9] == bytes.fromhex("840002") else None)
+            return
         if packet.startswith(PREFIX + b"\x09\x00\x0d") and len(packet) >= 11:
             mode = MODE_NAMES.get(packet[7])
             if mode:
@@ -132,4 +139,4 @@ class AACPClient:
         return self.snapshot()
 
     def snapshot(self):
-        return copy.deepcopy(self.state)
+        return {**copy.deepcopy(self.state), "accommodation_report_available": self.accommodation is not None}

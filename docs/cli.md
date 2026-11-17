@@ -141,3 +141,9 @@ airpods-control service stop --json
 | 服务日志 | `~/.local/state/airpods-transparency/service.log` |
 
 支持 `XDG_CONFIG_HOME` 和 `XDG_STATE_HOME`。日志按 1 MiB 轮转，保留两份历史。备份和预设文件权限为 `0600`。
+
+### 自动同步辅助配置
+
+`set`、`restore` 和 `preset apply` 在参数改变并读回一致后，原样发送耳机在当前控制连接中报告的兼容辅助配置。JSON 字段 `accommodation_sent` 表示是否发送。未收到兼容配置时，普通写入仍可完成，并返回 `false`。
+
+`set --sync-accommodation` 要求本次连接已收到兼容配置，并允许在参数相同时重发。使用 `status --json` 中的 `accommodation_report_available` 检查配置是否可用。[协议说明](https://github.com/librepods-org/librepods/blob/89356c08cea3db0b6b54792d9329d09a87cc85fa/docs/AAP%20Definitions.md#customize-transparency-mode)

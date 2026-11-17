@@ -82,9 +82,9 @@ class Window(QtWidgets.QWidget):
         sound = QtWidgets.QWidget()
         sound_layout = QtWidgets.QVBoxLayout(sound)
         self.tabs.addTab(sound, "声音调节")
-        warning = QtWidgets.QLabel("先点“读取设置”。首次使用 AirPods Pro 3 时，可在此启用高级调节。")
-        warning.setWordWrap(True)
-        sound_layout.addWidget(warning)
+        self.sound_mode = QtWidgets.QLabel("读取设置后，可在通透模式下试听。")
+        self.sound_mode.setWordWrap(True)
+        sound_layout.addWidget(self.sound_mode)
         self.rebuild_button = QtWidgets.QPushButton("重建高级调节连接（会中断音频）")
         self.rebuild_button.clicked.connect(lambda: self.reconnect(rebuild_settings=True))
         self.rebuild_button.setEnabled(not demo)
@@ -345,6 +345,8 @@ class Window(QtWidgets.QWidget):
         index = self.mode_combo.findData(mode)
         title = self.mode_combo.itemText(index) if index >= 0 else "未知"
         self.mode_label.setText(f"当前模式：{title}")
+        self.sound_mode.setText(f"耳机当前模式：{title}" if mode == "transparency" else
+                                f"耳机当前模式：{title}。试听自定义通透参数时，请先在总览切到通透。")
         # Do not reset a user's pending mode selection during periodic refresh.
         if not self.mode_combo.hasFocus() and index >= 0 and not getattr(self, "mode_initialized", False):
             self.mode_combo.setCurrentIndex(index)
@@ -420,6 +422,7 @@ class Window(QtWidgets.QWidget):
                     self.device_state["mode"] = profile["mode"]
                 return self.controller.apply(profile["values"])
             result = rpc("preset_apply", self.controller.mac, name=name, transport=self.transport)
+            self.controller.accommodation_sent = result.get("accommodation_sent", False)
             return Settings(bytes.fromhex(result["raw_hex"])), result["backup"]
         def applied(result):
             self.applied(result)
@@ -658,8 +661,13 @@ class Window(QtWidgets.QWidget):
     def applied(self, result):
         settings, backup = result
         self.populate(settings)
-        self.status.setText("已应用到演示设备。" if self.demo else
-                            f"已写入并读回验证。\n原值备份：{backup}" if backup else "参数未改变，无需写入。")
+        if self.demo:
+            self.status.setText("已应用到演示设备。")
+        elif backup:
+            sync_status = "已发送辅助配置。" if self.controller.accommodation_sent else "本次未同步辅助配置。"
+            self.status.setText(f"耳机读回值与设置一致。{sync_status}请在通透模式下试听环境声。\n原值备份：{backup}")
+        else:
+            self.status.setText("参数未改变，无需写入。")
 
     def restore(self):
         try:
