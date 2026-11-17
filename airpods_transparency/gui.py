@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .cli import devices
 from .service import RemoteController as Controller, rpc
 from .settings import FIELDS, Settings
+from .setup import enable_advanced, host_modalias
 from .transport import normalize_mac
 
 
@@ -81,13 +82,19 @@ class Window(QtWidgets.QWidget):
         sound = QtWidgets.QWidget()
         sound_layout = QtWidgets.QVBoxLayout(sound)
         self.tabs.addTab(sound, "声音调节")
-        warning = QtWidgets.QLabel("高级调节需要 Apple DeviceID。先点“读取设置”，调整滑条后点“备份并应用”。")
+        warning = QtWidgets.QLabel("先点“读取设置”。首次使用 AirPods Pro 3 时，可在此启用高级调节。")
         warning.setWordWrap(True)
         sound_layout.addWidget(warning)
         self.rebuild_button = QtWidgets.QPushButton("重建高级调节连接（会中断音频）")
         self.rebuild_button.clicked.connect(lambda: self.reconnect(rebuild_settings=True))
         self.rebuild_button.setEnabled(not demo)
-        sound_layout.addWidget(self.rebuild_button)
+        setup_row = QtWidgets.QHBoxLayout()
+        self.setup_button = QtWidgets.QPushButton("启用高级调节…")
+        self.setup_button.clicked.connect(self.setup_advanced)
+        self.setup_button.setVisible(not demo)
+        setup_row.addWidget(self.setup_button)
+        setup_row.addWidget(self.rebuild_button)
+        sound_layout.addLayout(setup_row)
         self.enabled = QtWidgets.QCheckBox("启用自定义通透模式")
         sound_layout.addWidget(self.enabled)
         self.link_ears = QtWidgets.QCheckBox("同步左右耳 · 调整任一侧时同时调整另一侧")
@@ -482,6 +489,7 @@ class Window(QtWidgets.QWidget):
         self.find_button.setEnabled(False)
         self.load_button.setEnabled(False)
         self.reconnect_button.setEnabled(False)
+        self.setup_button.setEnabled(False)
         self.rebuild_button.setEnabled(False)
         self.address.setEnabled(False)
         self.status.setToolTip("")
@@ -499,6 +507,7 @@ class Window(QtWidgets.QWidget):
         self.find_button.setEnabled(not self.demo)
         self.load_button.setEnabled(True)
         self.reconnect_button.setEnabled(not self.demo)
+        self.setup_button.setEnabled(not self.demo)
         self.rebuild_button.setEnabled(not self.demo)
         self.address.setEnabled(not self.demo)
         try:
@@ -535,9 +544,38 @@ class Window(QtWidgets.QWidget):
             self.controller = Controller(mac, transport=self.transport)
         self.loaded = None
         self.refresh_overview()
-        self.run(self.controller.read, self.populate, "读取通透参数…", "声音参数暂不可用（不代表蓝牙未连接）")
+        def read():
+            try:
+                return self.controller.read()
+            except Exception as exc:
+                if self.demo or "0x0e" not in str(exc).lower():
+                    raise
+                try:
+                    identity = host_modalias(mac)
+                except Exception:
+                    identity = ""
+                if identity.lower().startswith("usb:v1d6bp0246"):
+                    raise RuntimeError("当前适配器使用 Linux 默认蓝牙身份。请点“启用高级调节…”（ATT 0x0e）。") from exc
+                raise
 
-    def reconnect(self, checked=False, *, rebuild_settings=False):
+        self.run(read, self.populate, "读取通透参数…", "声音参数读取失败")
+
+    def setup_advanced(self):
+        if self.demo or self.pending:
+            return
+        try:
+            mac = normalize_mac(self.address.text().strip())
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        if QtWidgets.QMessageBox.question(
+                self, "启用高级调节", "为这台电脑长期启用 Apple 蓝牙 DeviceID？\n"
+                "首次配置需要系统授权，将备份配置并重启蓝牙，所有蓝牙设备会短暂断开。"
+                "完成后会重新连接耳机并读取参数。") != QtWidgets.QMessageBox.Yes:
+            return
+        self.reconnect(setup=True)
+
+    def reconnect(self, checked=False, *, rebuild_settings=False, setup=False):
         try:
             mac = normalize_mac(self.address.text().strip())
         except ValueError as exc:
@@ -550,15 +588,19 @@ class Window(QtWidgets.QWidget):
                 self.controller.backend = result["backend"]
                 self.populate(Settings(bytes.fromhex(result["raw_hex"])))
             elif result.get("settings_skipped") == "linux_device_id":
-                self.status.setText("立体声音频已连接。当前使用 Linux 默认蓝牙身份。AirPods Pro 3 的高级调节需要在首次配置中启用 Apple DeviceID。")
+                self.status.setText("立体声音频已连接。当前使用 Linux 默认蓝牙身份。AirPods Pro 3 请点“启用高级调节…”。")
                 self.refresh_overview()
             else:
                 self.status.setText("立体声音频已连接。高级声音参数暂不可用。")
                 self.status.setToolTip(result["settings_error"])
                 self.refresh_overview()
-        self.run(lambda: rpc("reconnect", mac, rebuild_settings=rebuild_settings,
-                             transport=self.transport), finished,
-                 "重建高级调节连接…" if rebuild_settings else "检查立体声音频和声音参数…",
+        def connect():
+            if setup:
+                enable_advanced(mac)
+            return rpc("reconnect", mac, rebuild_settings=rebuild_settings, transport=self.transport)
+
+        self.run(connect, finished,
+                 "正在启用高级调节…" if setup else ("重建高级调节连接…" if rebuild_settings else "检查立体声音频和声音参数…"),
                  "连接检查失败")
 
     def populate(self, settings):

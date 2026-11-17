@@ -63,16 +63,11 @@ python tools/install_desktop.py
 
 ### 启用自定义通透调节
 
-自定义通透参数要求这台电脑使用 Apple 蓝牙 DeviceID。首次启用时，执行：
+连接 AirPods Pro 3，在控制中心的 **声音调节** 页点击 **启用高级调节…**，按系统提示授权一次。应用会备份 `/etc/bluetooth/main.conf`、为这台电脑启用 Apple DeviceID，并重启蓝牙。蓝牙键盘、鼠标和耳机会短暂断开。应用随后重新连接耳机，读到参数后即可拖动滑条。此配置重启后继续生效，日常调节使用普通用户权限。
 
-```bash
-sudo python3 tools/configure_bluez.py --enable
-sudo systemctl restart bluetooth
-```
+命令行也可运行 `airpods-control enable-advanced --mac ADDRESS --json`。如果当前适配器已经启用了所需身份，应用直接检查连接和声音参数。
 
-配置工具会先备份 `/etc/bluetooth/main.conf`，并打印备份路径。重启蓝牙会短暂断开蓝牙耳机、键盘和鼠标；完成后重新连接 AirPods。
-
-配置后若仍无法读取参数，先按下文的[连接排查步骤](#常见问题)诊断和重连。需要恢复电脑原配置时，使用工具打印的实际备份路径：
+需要恢复电脑原配置时，使用启用前生成的实际备份路径（位于 `/etc/bluetooth/main.conf.airpods-*`）：
 
 ```bash
 sudo python3 tools/configure_bluez.py --restore /path/to/main.conf.backup

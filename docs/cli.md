@@ -17,7 +17,8 @@ airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
 - `devices`：列出 BlueZ 中已知、名称含 AirPods 的设备；配对请使用系统蓝牙设置。
 - `status`：电量、模式、型号、固件及控制连接状态。未报告的电量为 `null`。
 - `watch`：有变化时输出一行 JSON，Ctrl+C 结束。轮询间隔可设为 0.2～60 秒。
-- `doctor`：诊断配对、连接、DeviceID、后台服务和声音参数访问。
+- `enable-advanced --mac ADDRESS --json` 通过系统授权启用长期配置，再连接耳机。检查 `settings_ready` 确认是否读到了声音参数。
+- `doctor`：诊断配对、连接、配置文件中的 DeviceID、适配器当前身份（`host_modalias`）、后台服务和声音参数访问。
 - `reconnect` 会保留已有的立体声音频连接，必要时连接音频，再读取一次声音参数。`ok: true` 表示音频连接成功。`settings_ready: true` 时返回 `backend` 和本次读取的 `raw_hex`；为 `false` 时，`settings_error` 给出高级参数读取失败的原因。使用默认 Linux DeviceID 且尚无高级通道时，该命令只恢复音频，此时 `settings_ready` 为 `null`，`settings_skipped` 为 `linux_device_id`。使用 `read` 可以单独发起读取。
 - `reconnect --rebuild-settings` 在 Apple DeviceID 下重建音频，先读一次直接 ATT 并释放，再通过 BlueZ 或新开的 ATT 连接读取完整参数。成功时，`backend` 表示实际用于确认设置就绪的通道。适用于启用 Apple DeviceID 后普通读取仍失败的情况。
 

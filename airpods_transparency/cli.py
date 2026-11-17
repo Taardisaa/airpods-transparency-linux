@@ -1,4 +1,5 @@
 import argparse
+import configparser
 import json
 import subprocess
 import sys
@@ -43,7 +44,7 @@ def parser(json_errors=False):
     gui.add_argument("--demo", action="store_true", help="Simulated device; no Bluetooth access")
     gui.add_argument("--transport", choices=["auto", "bluez", "att"], default="auto")
     gui.add_argument("--tray", action="store_true", help="Start minimized to the tray when available")
-    for name in ("status", "watch", "mode", "reconnect"):
+    for name in ("status", "watch", "mode", "reconnect", "enable-advanced"):
         cmd = commands.add_parser(name, **({"help": "Ensure stereo audio is connected and check settings"}
                                           if name == "reconnect" else {}))
         cmd.add_argument("--mac", required=True, type=normalize_mac)
@@ -110,13 +111,15 @@ def doctor(mac, transport="auto"):
     diagnostics["device"] = {line.strip().split(":", 1)[0].lower(): line.split(":", 1)[1].strip()
                              for line in info.splitlines()
                              if any(label in line for label in ("Name:", "Paired:", "Connected:", "Trusted:"))}
-    conf = Path("/etc/bluetooth/main.conf")
+    from .setup import configured_identity, host_modalias
     try:
-        configured = any(line.split("#", 1)[0].replace(" ", "").strip().lower()
-                         == "deviceid=bluetooth:004c:0000:0000" for line in conf.read_text().splitlines())
-        diagnostics["apple_device_id_configured"] = configured
-    except OSError as exc:
+        diagnostics["apple_device_id_configured"] = configured_identity()
+    except (OSError, configparser.Error) as exc:
         diagnostics["configuration_error"] = str(exc)
+    try:
+        diagnostics["host_modalias"] = host_modalias(mac)
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        diagnostics["host_modalias_error"] = str(exc)
     controller = Controller(mac, transport=transport)
     try:
         diagnostics["service"] = rpc("ping")
@@ -151,6 +154,12 @@ def main(argv=None):
             result = doctor(args.mac, args.transport)
             print(json.dumps({"ok": True, **result}, indent=2))
             return 0
+        if args.command == "enable-advanced":
+            from .setup import enable_advanced
+            result = enable_advanced(args.mac)
+            result.update(rpc("reconnect", args.mac))
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0 if result.get("settings_ready") else 1
         if args.command == "service":
             print(json.dumps(rpc("shutdown" if args.operation == "stop" else "ping",
                                  start=args.operation == "start"), indent=2))

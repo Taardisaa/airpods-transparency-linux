@@ -28,3 +28,28 @@ def test_disable_removes_only_our_override_and_preserves_other_configuration():
     assert config.disable(expected) == expected
     custom = '[General]\nDeviceID = usb:1234:5678:0000\n'
     assert config.disable(custom) == custom
+
+
+def test_restart_failure_restores_original_config(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+    import pytest
+
+    path = tmp_path / "main.conf"
+    original = b"[General]\nName = Studio\n"
+    path.write_bytes(original)
+    monkeypatch.setattr(config, "CONFIG", path)
+    monkeypatch.setattr(config.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys, "argv", ["configure_bluez", "--enable", "--restart"])
+    observed = []
+    def restart():
+        observed.append(path.read_bytes())
+        if len(observed) == 1:
+            raise subprocess.CalledProcessError(1, ["systemctl"])
+    monkeypatch.setattr(config, "restart", restart)
+    with pytest.raises(subprocess.CalledProcessError):
+        config.main()
+    assert observed == [config.edit(original.decode()).encode(), original]
+    assert path.read_bytes() == original
+    backup, = tmp_path.glob("main.conf.airpods-*")
+    assert backup.read_bytes() == original

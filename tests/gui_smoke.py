@@ -111,3 +111,49 @@ def test_reconnect_audio_only_keeps_settings_disabled(monkeypatch):
     assert "0x0e" in window.status.toolTip()
     assert not window.apply_button.isEnabled()
     window.close()
+
+
+def test_default_identity_read_error_explains_setup(monkeypatch):
+    from airpods_transparency import gui
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = Window()
+    window.address.setText("AA:BB:CC:DD:EE:FF")
+    def fail_read(self):
+        raise RuntimeError("ATT error: 0x0e")
+    monkeypatch.setattr(gui.Controller, "read", fail_read)
+    monkeypatch.setattr(gui, "rpc", lambda *a, **kw: {"battery": {}})
+    for identity, suggests_setup in (("usb:v1D6Bp0246d0540", True), ("bluetooth:v004Cp0000d0000", False)):
+        monkeypatch.setattr(gui, "host_modalias", lambda mac: identity)
+        window.load()
+        drain(app, window)
+        assert ("启用高级调节" in window.status.text()) == suggests_setup
+        assert "0x0e" in window.status.text()
+        assert not window.apply_button.isEnabled()
+    window.close()
+
+
+def test_setup_populates_sliders_from_reconnected_device(monkeypatch):
+    from airpods_transparency import gui
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls = []
+    raw = struct.pack("<26f", 1, *([0] * 25))
+    def rpc(action, *args, **kwargs):
+        if action == "reconnect":
+            calls.append(action)
+            return {"settings_ready": True, "backend": "att", "raw_hex": raw.hex()}
+        if action == "preset_list":
+            return {"presets": {}}
+        return {"battery": {}}
+    monkeypatch.setattr(gui, "rpc", rpc)
+    monkeypatch.setattr(gui, "enable_advanced", lambda mac: calls.append("setup"))
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *a: QtWidgets.QMessageBox.No)
+    window = Window()
+    window.address.setText("AA:BB:CC:DD:EE:FF")
+    window.setup_button.click()
+    assert not calls
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *a: QtWidgets.QMessageBox.Yes)
+    window.setup_button.click()
+    drain(app, window)
+    assert calls == ["setup", "reconnect"]
+    assert window.loaded.raw == raw and window.sliders["left_amplification"].isEnabled()
+    window.close()
