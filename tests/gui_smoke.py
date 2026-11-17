@@ -90,3 +90,24 @@ def test_overview_modes_and_presets_share_demo_state(monkeypatch):
     window.update_overview({'connected': False, 'bluetooth_connected': True, 'battery': {}})
     assert '蓝牙已连接，控制通道不可用' in window.connection_label.text()
     window.close()
+
+
+def test_reconnect_audio_only_keeps_settings_disabled(monkeypatch):
+    from airpods_transparency import gui
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    def rpc(action, *args, **kwargs):
+        if action == "preset_list":
+            return {"presets": {}}
+        if action == "status":
+            return {"connected": True, "bluetooth_connected": True, "battery": {}}
+        assert action == "reconnect" and not kwargs["rebuild_settings"]
+        return {"settings_ready": False, "settings_error": "ATT error 0x0e"}
+    monkeypatch.setattr(gui, "rpc", rpc)
+    window = Window()
+    window.address.setText("AA:BB:CC:DD:EE:FF")
+    window.reconnect_button.click()
+    drain(app, window)
+    assert "立体声音频已连接" in window.status.text()
+    assert "0x0e" in window.status.toolTip()
+    assert not window.apply_button.isEnabled()
+    window.close()

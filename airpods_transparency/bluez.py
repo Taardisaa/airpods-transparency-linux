@@ -62,34 +62,84 @@ def device_connected(mac):
     return any(property_value(path, "org.bluez.Device1", "Connected") for path in device_paths(mac))
 
 
-def reconnect_audio(mac, prepare=None):
-    """Reset this device's channels, then connect its A2DP sink profile only.
+A2DP_SOURCE = "0000110a-0000-1000-8000-00805f9b34fb"
+A2DP_SINK = "0000110b-0000-1000-8000-00805f9b34fb"
+DEVICE = "org.bluez.Device1"
 
-    Explicit user action: audio pauses briefly. Never called as a side effect of
-    reading settings, and never removes pairing or restarts the adapter.
-    """
+
+def a2dp_connected(path):
+    # A configured local A2DP source transport exists even while music is idle.
+    # Connected alone could also mean an ATT-only connection.
+    children = child_paths(path)
+    transports = [p for p in children if re.fullmatch(r"fd\d+", p.rsplit("/", 1)[-1])]
+    for endpoint in children:
+        if re.fullmatch(r"sep\d+", endpoint.rsplit("/", 1)[-1]):
+            transports.extend(child_paths(endpoint))
+    for transport in transports:
+        if not re.fullmatch(r"fd\d+", transport.rsplit("/", 1)[-1]):
+            continue
+        try:
+            uuid = property_value(transport, "org.bluez.MediaTransport1", "UUID")
+        except RuntimeError:
+            continue  # Transport can disappear during profile negotiation.
+        if uuid.lower() == A2DP_SOURCE:
+            return True
+    return False
+
+
+def ensure_audio(path):
+    if a2dp_connected(path):
+        return
+    for attempt in range(2):
+        failure = None
+        try:
+            bus_call(path, DEVICE, "ConnectProfile", "s", A2DP_SINK, timeout=25)
+        except RuntimeError as exc:
+            # BlueZ can cancel our call while another connection is completing.
+            # Reconcile with the actual transport before issuing another call.
+            if not any(code in str(exc).lower() for code in
+                       ("br-connection-canceled", "br-connection-unknown", "inprogress",
+                        "in progress", "already connected")):
+                if a2dp_connected(path):
+                    return
+                raise
+            failure = exc
+        deadline = time.monotonic() + 3
+        while not a2dp_connected(path):
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
+        else:
+            return
+        if attempt and failure is not None:
+            raise failure
+    raise ConnectionError("BlueZ did not establish a stereo audio transport")
+
+
+def uses_linux_device_id(path):
+    adapter = path.rsplit("/", 1)[0]
+    try:
+        modalias = property_value(adapter, "org.bluez.Adapter1", "Modalias")
+    except RuntimeError:
+        return False
+    return modalias.lower().startswith("usb:v1d6bp0246")
+
+
+def reconnect_audio(mac, rebuild_settings=False):
     paths = device_paths(mac)
     if len(paths) != 1:
         raise ValueError("Expected one paired AirPods device on one adapter")
     path = paths[0]
-    if property_value(path, "org.bluez.Device1", "Connected"):
-        bus_call(path, "org.bluez.Device1", "Disconnect")
+    linux_id = uses_linux_device_id(path)
+    if rebuild_settings and not linux_id and property_value(path, DEVICE, "Connected"):
+        bus_call(path, DEVICE, "Disconnect")
         deadline = time.monotonic() + 5
-        while property_value(path, "org.bluez.Device1", "Connected"):
+        while property_value(path, DEVICE, "Connected"):
             if time.monotonic() >= deadline:
                 raise TimeoutError("AirPods disconnection did not finish")
             time.sleep(0.1)
-    preparation_error = None
-    if prepare:
-        try:
-            prepare()  # Keep ATT open before audio/GATT reconnect competes for it.
-        except Exception as exc:
-            preparation_error = exc
-    bus_call(path, "org.bluez.Device1", "ConnectProfile", "s",
-             "0000110b-0000-1000-8000-00805f9b34fb", timeout=25)
-    if preparation_error:
-        raise RuntimeError(f"Audio reconnected, but advanced settings are unavailable: {preparation_error}") from preparation_error
-    return {"bluetooth_connected": device_connected(mac), "profile": "a2dp_sink"}
+    ensure_audio(path)
+    return {"bluetooth_connected": True, "profile": "a2dp_sink", "linux_device_id": linux_id}
 
 
 def find_transparency_targeted(mac):
@@ -116,7 +166,9 @@ def find_transparency(mac):
     device_suffix = "/dev_" + normalize_mac(mac).replace(":", "_")
     try:
         response = bus_call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects")
-    except (RuntimeError, OSError, subprocess.SubprocessError):
+    except (RuntimeError, OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return find_transparency_targeted(mac)
+    if not response:
         return find_transparency_targeted(mac)
     candidates = []
     for path, interfaces in response["data"][0].items():

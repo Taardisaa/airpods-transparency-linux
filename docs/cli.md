@@ -18,7 +18,8 @@ airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
 - `status`：电量、模式、型号、固件及控制连接状态。未报告的电量为 `null`。
 - `watch`：有变化时输出一行 JSON，Ctrl+C 结束。轮询间隔可设为 0.2～60 秒。
 - `doctor`：诊断配对、连接、DeviceID、后台服务和声音参数访问。
-- `reconnect`：关闭应用的控制通道，断开这副耳机并重新连接 A2DP 音频，再由应用恢复控制通道。音频会短暂中断；保留配对与声音参数，不重启整个蓝牙适配器。服务会先建立并保持直接 ATT 通道，再恢复音频并验证读取；成功结果包含 `settings_ready: true`。重连可能需要约 15～30 秒。高级 ATT 访问仍可能在约 30 秒后触发耳机断连，适用边界和恢复日常音频的步骤见 [README 的 Limitation](../README.md#limitation)。
+- `reconnect` 会保留已有的立体声音频连接，必要时连接音频，再读取一次声音参数。`ok: true` 表示音频连接成功。`settings_ready: true` 时返回 `backend` 和本次读取的 `raw_hex`；为 `false` 时，`settings_error` 给出高级参数读取失败的原因。使用默认 Linux DeviceID 且尚无高级通道时，该命令只恢复音频，此时 `settings_ready` 为 `null`，`settings_skipped` 为 `linux_device_id`。使用 `read` 可以单独发起读取。
+- `reconnect --rebuild-settings` 在 Apple DeviceID 下重建音频，短暂打开直接 ATT 通道，然后释放给 BlueZ。应用读到完整参数后才报告高级调节就绪。适用于启用 Apple DeviceID 后普通读取仍失败的情况。
 
 `connected` 表示 AirPods 控制通道状态，`bluetooth_connected` 表示 BlueZ 报告的蓝牙连接状态（检查失败时为 `null`）。两者分别报告，避免把控制通道错误误认为蓝牙断开。仅使用一只耳机也可以查看状态；另一只未报告电量时显示未知。
 

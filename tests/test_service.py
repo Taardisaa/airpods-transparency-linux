@@ -90,16 +90,22 @@ def test_reconnect_closes_control_session_before_reset_and_does_not_write(tmp_pa
             calls.append("close")
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
     engine.sessions[mac] = Session()
-    monkeypatch.setattr(bluez, "reconnect_audio", lambda address, prepare: (prepare(), calls.append(address), {"bluetooth_connected": True})[-1])
-    def prepare(address):
+    def audio(address, rebuild_settings):
+        assert rebuild_settings
+        calls.append(address)
+        return {"bluetooth_connected": True}
+    monkeypatch.setattr(bluez, "reconnect_audio", audio)
+    def handoff(address):
         import struct
-        from types import SimpleNamespace
-        calls.append("prepare")
-        engine.settings_clients[address] = SimpleNamespace(read=lambda: struct.pack("<26f", *([1] + [0] * 25)))
-    monkeypatch.setattr(engine, "prepare_settings", prepare)
+        from airpods_transparency.settings import Settings
+        calls.append("handoff")
+        return Settings(struct.pack("<26f", *([1] + [0] * 25)))
+    monkeypatch.setattr(engine, "handoff_settings", handoff)
     monkeypatch.setattr(service, "Controller", lambda *args, **kwargs: pytest.fail("must not write settings"))
-    assert engine.dispatch({"action": "reconnect", "mac": mac}) == {"bluetooth_connected": True, "settings_ready": True, "backend": "att"}
-    assert calls == ["close", "prepare", mac]
+    result = engine.dispatch({"action": "reconnect", "mac": mac, "rebuild_settings": True})
+    assert result["bluetooth_connected"] and result["settings_ready"]
+    assert result["backend"] == "bluez" and len(bytes.fromhex(result["raw_hex"])) == 104
+    assert calls == ["close", mac, "handoff"]
     assert not engine.sessions
 
 
@@ -147,3 +153,42 @@ def test_offline_read_never_opens_bluetooth_connection(tmp_path, monkeypatch):
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
     with pytest.raises(ConnectionError, match="disconnected"):
         engine.dispatch({"action": "read", "mac": "AA:BB:CC:DD:EE:FF"})
+
+
+def test_reconnect_default_linux_host_leaves_advanced_channel_closed(monkeypatch):
+    from airpods_transparency import bluez
+    engine = service.Engine()
+    def healthy(mac, rebuild_settings):
+        assert not rebuild_settings
+        return {"bluetooth_connected": True, "linux_device_id": True}
+    monkeypatch.setattr(bluez, "reconnect_audio", healthy)
+    monkeypatch.setattr(engine, "settings_channel", lambda *args: pytest.fail("unexpected ATT probe"))
+    result = engine.dispatch({"action": "reconnect", "mac": "AA:BB:CC:DD:EE:FF"})
+    assert result["settings_ready"] is None
+    assert result["settings_skipped"] == "linux_device_id"
+
+
+def test_handoff_releases_raw_before_bluez_read_and_reuses_bluez(monkeypatch):
+    import struct
+    from airpods_transparency import bluez
+    mac = "AA:BB:CC:DD:EE:FF"
+    events = []
+    class Client:
+        def __init__(self, address, transport):
+            self.backend = transport
+        def __enter__(self):
+            events.append(("open", self.backend))
+            return self
+        def read(self):
+            events.append(("read", self.backend))
+            return struct.pack("<26f", *([1] + [0] * 25))
+        def __exit__(self, *args):
+            events.append(("close", self.backend))
+    monkeypatch.setattr(bluez, "SettingsClient", Client)
+    monkeypatch.setattr(bluez, "device_connected", lambda address: True)
+    engine = service.Engine()
+    initial = engine.handoff_settings(mac)
+    assert engine.dispatch({"action": "read", "mac": mac})["raw_hex"] == initial.raw.hex()
+    engine.close()
+    assert events == [("open", "att"), ("read", "att"), ("close", "att"),
+                      ("open", "bluez"), ("read", "bluez"), ("read", "bluez"), ("close", "bluez")]

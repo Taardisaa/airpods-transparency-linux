@@ -94,7 +94,17 @@ class Session:
         self.ready.wait(6)
         with self.lock:
             state = self.client.snapshot()
-            state.update(mac=self.mac, error=self.error, bluetooth_connected=self.bluetooth_connected)
+            connected = self.bluetooth_connected
+            error = self.error
+            if not self.client.sock:
+                from .bluez import device_connected
+                try:
+                    connected = device_connected(self.mac)
+                    if connected and error == "AirPods are not connected in BlueZ":
+                        error = "Waiting for AirPods control channel"
+                except (RuntimeError, OSError, subprocess.SubprocessError):
+                    connected = None
+            state.update(mac=self.mac, error=error, bluetooth_connected=connected)
             return state
 
     def mode(self, mode):
@@ -120,21 +130,33 @@ class Engine:
         if client:
             client.__exit__(None, None, None)
 
-    def prepare_settings(self, mac):
-        from .bluez import SettingsClient
-        client = SettingsClient(mac, "att")
-        client.__enter__()
+    def handoff_settings(self, mac):
+        from .bluez import SettingsClient, device_connected
+        # Read once during audio setup and immediately release the raw channel
+        # so bluetoothd can finish service discovery and own subsequent reads.
         try:
-            Settings(client.read())
-        except BaseException:
-            client.__exit__(None, None, None)
-            raise
-        self.settings_clients[mac] = client
+            with SettingsClient(mac, "att") as client:
+                Settings(client.read())
+        except (OSError, RuntimeError) as exc:
+            logger.info("Initial ATT read unavailable: %s", exc)
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with self.settings_channel(mac, "bluez") as client:
+                    settings = Settings(client.read())
+                    self.settings_clients[mac] = client
+                    return settings
+            except (RuntimeError, OSError):
+                if time.monotonic() >= deadline or not device_connected(mac):
+                    raise
+                time.sleep(0.5)
 
     @contextmanager
     def settings_channel(self, mac, transport):
         from .bluez import SettingsClient, device_connected
-        client = self.settings_clients.get(mac) if transport != "bluez" else None
+        client = self.settings_clients.get(mac)
+        if client and transport not in ("auto", client.backend):
+            client = None
         if client is None:
             if not device_connected(mac):
                 raise ConnectionError("AirPods are disconnected; connect them or use reconnect before reading settings")
@@ -146,10 +168,10 @@ class Engine:
             yield client
         except BaseException:
             if self.settings_clients.get(mac) is client:
-                self.drop_settings(mac)
+                del self.settings_clients[mac]
             raise  # Never replay a write after a connection failure.
         finally:
-            if client.backend != "att":
+            if self.settings_clients.get(mac) is not client:
                 client.__exit__(None, None, None)
 
     def session(self, mac):
@@ -157,6 +179,40 @@ class Engine:
             if mac not in self.sessions:
                 self.sessions[mac] = Session(mac)
             return self.sessions[mac]
+
+    def reconnect(self, mac, rebuild_settings, transport):
+        from .bluez import reconnect_audio, device_paths, a2dp_connected
+        with self.session_lock:
+            if rebuild_settings:
+                session = self.sessions.pop(mac, None)
+                if session:
+                    session.close()
+                self.drop_settings(mac)
+            try:
+                result = reconnect_audio(mac, rebuild_settings=rebuild_settings)
+            except Exception:
+                self.drop_settings(mac)
+                raise
+            if result.get("linux_device_id") and mac not in self.settings_clients:
+                return {**result, "settings_ready": None, "settings_skipped": "linux_device_id"}
+            try:
+                if rebuild_settings and transport == "auto":
+                    settings = self.handoff_settings(mac)
+                    backend = "bluez"
+                else:
+                    if transport == "auto" and mac not in self.settings_clients:
+                        transport = "bluez"
+                    with self.settings_channel(mac, transport) as client:
+                        settings = Settings(client.read())
+                        backend = client.backend
+                return {**result, "settings_ready": True, "backend": backend,
+                        "raw_hex": settings.raw.hex()}
+            except Exception as exc:
+                result["settings_error"] = str(exc)
+            paths = device_paths(mac)
+            if len(paths) != 1 or not a2dp_connected(paths[0]):
+                raise ConnectionError(f"Stereo audio disconnected during settings check: {result['settings_error']}")
+            return {**result, "settings_ready": False}
 
     def dispatch(self, request):
         action = request.get("action")
@@ -175,21 +231,8 @@ class Engine:
             return self.session(mac).mode(request["mode"])
         with self.settings_lock:
             if action == "reconnect":
-                # Close our channel before resetting Bluetooth. No settings
-                # writes, unpairing, or adapter-wide changes are involved.
-                from .bluez import reconnect_audio
-                with self.session_lock:
-                    session = self.sessions.pop(mac, None)
-                    if session:
-                        session.close()
-                    self.drop_settings(mac)
-                    result = reconnect_audio(mac, prepare=lambda: self.prepare_settings(mac))
-                    try:
-                        Settings(self.settings_clients[mac].read())
-                    except Exception:
-                        self.drop_settings(mac)
-                        raise
-                    return {**result, "settings_ready": True, "backend": "att"}
+                return self.reconnect(mac, request.get("rebuild_settings", False),
+                                      request.get("transport", "auto"))
             transport = request.get("transport", "auto")
             controller = Controller(mac, factory=lambda address: self.settings_channel(address, transport))
             if action == "read":

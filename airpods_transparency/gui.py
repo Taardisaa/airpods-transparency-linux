@@ -70,7 +70,7 @@ class Window(QtWidgets.QWidget):
         self.load_button.clicked.connect(self.load)
         row.addWidget(self.load_button)
         self.reconnect_button = QtWidgets.QPushButton("重新连接")
-        self.reconnect_button.setToolTip("重建音频和控制连接，声音会短暂中断。保留配对和已保存的声音参数。")
+        self.reconnect_button.setToolTip("检查立体声音频和声音参数，已有音频连接会保留。")
         self.reconnect_button.clicked.connect(self.reconnect)
         self.reconnect_button.setEnabled(not demo)
         row.addWidget(self.reconnect_button)
@@ -84,6 +84,10 @@ class Window(QtWidgets.QWidget):
         warning = QtWidgets.QLabel("实验性功能：高级参数访问可能导致耳机约 30 秒后断连。调参后建议关闭 Apple DeviceID 覆盖并重启蓝牙，步骤见 README 的 Limitation。")
         warning.setWordWrap(True)
         sound_layout.addWidget(warning)
+        self.rebuild_button = QtWidgets.QPushButton("重建高级调节连接（会中断音频）")
+        self.rebuild_button.clicked.connect(lambda: self.reconnect(rebuild_settings=True))
+        self.rebuild_button.setEnabled(not demo)
+        sound_layout.addWidget(self.rebuild_button)
         self.enabled = QtWidgets.QCheckBox("启用自定义通透模式")
         sound_layout.addWidget(self.enabled)
         self.link_ears = QtWidgets.QCheckBox("同步左右耳 · 调整任一侧时同时调整另一侧")
@@ -160,7 +164,8 @@ class Window(QtWidgets.QWidget):
             self.find_button.setEnabled(False)
             self.load()
         elif mac:
-            QtCore.QTimer.singleShot(0, self.load)
+            self.status.setText("可在概览查看连接状态，点击“读取设置”加载高级声音参数。")
+            QtCore.QTimer.singleShot(0, self.refresh_overview)
 
     def build_overview(self):
         page = QtWidgets.QWidget()
@@ -477,7 +482,9 @@ class Window(QtWidgets.QWidget):
         self.find_button.setEnabled(False)
         self.load_button.setEnabled(False)
         self.reconnect_button.setEnabled(False)
+        self.rebuild_button.setEnabled(False)
         self.address.setEnabled(False)
+        self.status.setToolTip("")
         self.status.setText(message)
         self.pending = (self.pool.submit(work), callback)
         self.pending_error_label = error_label
@@ -492,6 +499,7 @@ class Window(QtWidgets.QWidget):
         self.find_button.setEnabled(not self.demo)
         self.load_button.setEnabled(True)
         self.reconnect_button.setEnabled(not self.demo)
+        self.rebuild_button.setEnabled(not self.demo)
         self.address.setEnabled(not self.demo)
         try:
             callback(future.result())
@@ -529,7 +537,7 @@ class Window(QtWidgets.QWidget):
         self.refresh_overview()
         self.run(self.controller.read, self.populate, "读取通透参数…", "声音参数暂不可用（不代表蓝牙未连接）")
 
-    def reconnect(self):
+    def reconnect(self, checked=False, *, rebuild_settings=False):
         try:
             mac = normalize_mac(self.address.text().strip())
         except ValueError as exc:
@@ -537,11 +545,21 @@ class Window(QtWidgets.QWidget):
             return
         self.loaded = None
         self.controller = Controller(mac, transport=self.transport)
-        def work():
-            rpc("reconnect", mac)
-            return self.controller.read()
-        self.run(work, self.populate, "重新建立音频和控制连接，声音会短暂中断…",
-                 "重连或读取失败，请检查系统蓝牙连接后重试")
+        def finished(result):
+            if result["settings_ready"]:
+                self.controller.backend = result["backend"]
+                self.populate(Settings(bytes.fromhex(result["raw_hex"])))
+            elif result.get("settings_skipped") == "linux_device_id":
+                self.status.setText("立体声音频已连接。当前使用 Linux 默认蓝牙身份，可点“读取设置”单独检查高级参数。")
+                self.refresh_overview()
+            else:
+                self.status.setText("立体声音频已连接。高级声音参数暂不可用。")
+                self.status.setToolTip(result["settings_error"])
+                self.refresh_overview()
+        self.run(lambda: rpc("reconnect", mac, rebuild_settings=rebuild_settings,
+                             transport=self.transport), finished,
+                 "重建高级调节连接…" if rebuild_settings else "检查立体声音频和声音参数…",
+                 "连接检查失败")
 
     def populate(self, settings):
         self.loaded = settings

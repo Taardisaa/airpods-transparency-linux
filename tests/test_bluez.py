@@ -143,10 +143,12 @@ def test_reconnect_only_resets_selected_device_and_connects_audio(monkeypatch):
     device = PATH.split('/service')[0]
     calls = []
     monkeypatch.setattr(bluez, "device_paths", lambda mac: [device])
-    states = iter([True, False, True])
+    states = iter(["bluetooth:v004Cp0000d0000", True, False])
+    audio_states = iter([False, True])
+    monkeypatch.setattr(bluez, "a2dp_connected", lambda path: next(audio_states))
     monkeypatch.setattr(bluez, "property_value", lambda *args: next(states))
     monkeypatch.setattr(bluez, "bus_call", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert bluez.reconnect_audio(MAC) == {"bluetooth_connected": True, "profile": "a2dp_sink"}
+    assert bluez.reconnect_audio(MAC, rebuild_settings=True) == {"bluetooth_connected": True, "profile": "a2dp_sink", "linux_device_id": False}
     assert calls == [((device, "org.bluez.Device1", "Disconnect"), {}),
                      ((device, "org.bluez.Device1", "ConnectProfile", "s",
                       "0000110b-0000-1000-8000-00805f9b34fb"), {"timeout": 25})]
@@ -159,14 +161,51 @@ def test_reconnect_rejects_ambiguous_device_before_disconnect(monkeypatch):
         bluez.reconnect_audio(MAC)
 
 
-def test_failed_advanced_prepare_still_restores_audio(monkeypatch):
+def test_healthy_audio_needs_no_profile_call(monkeypatch):
+    monkeypatch.setattr(bluez, "device_paths", lambda mac: ["/selected"])
+    monkeypatch.setattr(bluez, "a2dp_connected", lambda path: path == "/selected")
+    monkeypatch.setattr(bluez, "property_value", lambda *args: "usb:v1D6Bp0246d0540")
+    monkeypatch.setattr(bluez, "bus_call", lambda *args, **kwargs: pytest.fail("unexpected profile change"))
+    assert bluez.reconnect_audio(MAC)["bluetooth_connected"]
+
+
+@pytest.mark.parametrize("transport_appears,expected_calls", [(True, 1), (False, 2)])
+def test_canceled_connection_reconciles_transport_before_retry(monkeypatch, transport_appears, expected_calls):
     calls = []
-    monkeypatch.setattr(bluez, "device_paths", lambda mac: ["device"])
-    monkeypatch.setattr(bluez, "property_value", lambda *args: False)
-    monkeypatch.setattr(bluez, "bus_call", lambda *args, **kwargs: calls.append(args[2]))
-    def prepare():
-        calls.append("prepare")
-        raise ConnectionRefusedError("ATT busy")
-    with pytest.raises(RuntimeError, match="Audio reconnected.*ATT busy"):
-        bluez.reconnect_audio(MAC, prepare=prepare)
-    assert calls == ["prepare", "ConnectProfile"]
+    def connect(*args, **kwargs):
+        calls.append(args[2])
+        if len(calls) == 1:
+            raise RuntimeError("BlueZ ConnectProfile: br-connection-canceled")
+    monkeypatch.setattr(bluez, "bus_call", connect)
+    monkeypatch.setattr(bluez, "a2dp_connected",
+                        lambda p: bool(calls) and (transport_appears or len(calls) == 2))
+    times = iter(range(0, 100, 4))
+    monkeypatch.setattr(bluez.time, "monotonic", lambda: next(times))
+    bluez.ensure_audio("/selected")
+    assert calls == ["ConnectProfile"] * expected_calls
+
+
+def test_canceled_twice_without_transport_reports_error(monkeypatch):
+    def cancel(*args, **kwargs):
+        raise RuntimeError("br-connection-canceled")
+    monkeypatch.setattr(bluez, "bus_call", cancel)
+    monkeypatch.setattr(bluez, "a2dp_connected", lambda p: False)
+    times = iter(range(0, 100, 4))
+    monkeypatch.setattr(bluez.time, "monotonic", lambda: next(times))
+    with pytest.raises(RuntimeError, match="br-connection-canceled"):
+        bluez.ensure_audio("/selected")
+
+
+@pytest.mark.parametrize("endpoint", ["/fd0", "/sep1/fd2"])
+def test_audio_transport_is_local_source_even_when_idle(monkeypatch, endpoint):
+    device = PATH.split("/service")[0]
+    transport = device + endpoint
+    tree = {device: [device + "/" + endpoint.split("/")[1]], device + "/sep1": [transport]}
+    monkeypatch.setattr(bluez, "child_paths", lambda path: tree[path])
+    def prop(path, interface, key):
+        assert (path, interface, key) == (transport, "org.bluez.MediaTransport1", "UUID")
+        return bluez.A2DP_SOURCE
+    monkeypatch.setattr(bluez, "property_value", prop)
+    assert bluez.a2dp_connected(device)
+    monkeypatch.setattr(bluez, "property_value", lambda *args: bluez.A2DP_SINK)
+    assert not bluez.a2dp_connected(device)

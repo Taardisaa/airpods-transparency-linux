@@ -44,10 +44,13 @@ def parser(json_errors=False):
     gui.add_argument("--transport", choices=["auto", "bluez", "att"], default="auto")
     gui.add_argument("--tray", action="store_true", help="Start minimized to the tray when available")
     for name in ("status", "watch", "mode", "reconnect"):
-        cmd = commands.add_parser(name, **({"help": "Reconnect audio and control channels (brief audio interruption)"}
+        cmd = commands.add_parser(name, **({"help": "Ensure stereo audio is connected and check settings"}
                                           if name == "reconnect" else {}))
         cmd.add_argument("--mac", required=True, type=normalize_mac)
         cmd.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        if name == "reconnect":
+            cmd.add_argument("--rebuild-settings", action="store_true",
+                             help="Reconnect stereo audio and hand advanced settings over to BlueZ")
         if name == "mode":
             cmd.add_argument("value", choices=["off", "anc", "transparency", "adaptive"])
         if name == "watch":
@@ -153,7 +156,12 @@ def main(argv=None):
                                  start=args.operation == "start"), indent=2))
             return 0
         if args.command in ("status", "mode", "reconnect"):
-            print(json.dumps(rpc(args.command, args.mac, **({"mode": args.value} if args.command == "mode" else {})), indent=2))
+            params = {}
+            if args.command == "mode":
+                params["mode"] = args.value
+            elif args.command == "reconnect":
+                params["rebuild_settings"] = args.rebuild_settings
+            print(json.dumps(rpc(args.command, args.mac, **params), indent=2))
             return 0
         if args.command == "watch":
             if not 0.2 <= args.interval <= 60:
