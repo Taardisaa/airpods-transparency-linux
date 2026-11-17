@@ -130,10 +130,25 @@ class Engine:
         if client:
             client.__exit__(None, None, None)
 
+    def read_audio_settings(self, mac):
+        # Prefer the system GATT client once the earbuds have connected it.
+        # Before discovery finishes, ATT can be available between operations.
+        try:
+            with self.settings_channel(mac, "bluez") as client:
+                settings = Settings(client.read())
+                self.settings_clients[mac] = client
+                return settings, client.backend
+        except (RuntimeError, OSError) as bluez_error:
+            try:
+                with self.settings_channel(mac, "att") as client:
+                    return Settings(client.read()), client.backend
+            except (RuntimeError, OSError) as att_error:
+                raise ConnectionError(f"BlueZ: {bluez_error}. Direct ATT: {att_error}") from att_error
+
     def handoff_settings(self, mac):
         from .bluez import SettingsClient, device_connected
-        # Read once during audio setup and immediately release the raw channel
-        # so bluetoothd can finish service discovery and own subsequent reads.
+        # Release the initial socket before confirming that the next operation
+        # can open its own channel on this audio connection.
         try:
             with SettingsClient(mac, "att") as client:
                 Settings(client.read())
@@ -142,10 +157,7 @@ class Engine:
         deadline = time.monotonic() + 15
         while True:
             try:
-                with self.settings_channel(mac, "bluez") as client:
-                    settings = Settings(client.read())
-                    self.settings_clients[mac] = client
-                    return settings
+                return self.read_audio_settings(mac)
             except (RuntimeError, OSError):
                 if time.monotonic() >= deadline or not device_connected(mac):
                     raise
@@ -153,13 +165,17 @@ class Engine:
 
     @contextmanager
     def settings_channel(self, mac, transport):
-        from .bluez import SettingsClient, device_connected
+        from .bluez import SettingsClient, device_connected, stereo_connected
         client = self.settings_clients.get(mac)
         if client and transport not in ("auto", client.backend):
             client = None
         if client is None:
             if not device_connected(mac):
                 raise ConnectionError("AirPods are disconnected; connect them or use reconnect before reading settings")
+            if transport in ("auto", "att") and not stereo_connected(mac):
+                if transport == "att":
+                    raise ConnectionError("Connect stereo audio before opening the direct ATT channel")
+                transport = "bluez"
             client = SettingsClient(mac, transport)
             client.__enter__()
         try:
@@ -179,7 +195,7 @@ class Engine:
             return self.sessions[mac]
 
     def reconnect(self, mac, rebuild_settings, transport):
-        from .bluez import reconnect_audio, device_paths, a2dp_connected
+        from .bluez import reconnect_audio, stereo_connected
         with self.session_lock:
             if rebuild_settings:
                 session = self.sessions.pop(mac, None)
@@ -195,11 +211,10 @@ class Engine:
                 return {**result, "settings_ready": None, "settings_skipped": "linux_device_id"}
             try:
                 if rebuild_settings and transport == "auto":
-                    settings = self.handoff_settings(mac)
-                    backend = "bluez"
+                    settings, backend = self.handoff_settings(mac)
+                elif transport == "auto" and mac not in self.settings_clients:
+                    settings, backend = self.read_audio_settings(mac)
                 else:
-                    if transport == "auto" and mac not in self.settings_clients:
-                        transport = "bluez"
                     with self.settings_channel(mac, transport) as client:
                         settings = Settings(client.read())
                         backend = client.backend
@@ -207,8 +222,7 @@ class Engine:
                         "raw_hex": settings.raw.hex()}
             except Exception as exc:
                 result["settings_error"] = str(exc)
-            paths = device_paths(mac)
-            if len(paths) != 1 or not a2dp_connected(paths[0]):
+            if not stereo_connected(mac):
                 raise ConnectionError(f"Stereo audio disconnected during settings check: {result['settings_error']}")
             return {**result, "settings_ready": False}
 

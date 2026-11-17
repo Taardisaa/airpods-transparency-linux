@@ -50,8 +50,8 @@ def playing(name):
 
 def read_settings(mac):
     result = rpc("read", mac)
-    if result["backend"] != "bluez":
-        raise RuntimeError("Automatic read left the BlueZ settings channel")
+    if result["backend"] not in ("bluez", "att"):
+        raise RuntimeError("Settings read did not report a device transport")
     return Settings(bytes.fromhex(result["raw_hex"]))
 
 
@@ -70,9 +70,9 @@ def observe(mac, name, stream, sink_id, expected):
 
 def cycle(mac, number, prior, prior_sink):
     result = rpc("reconnect", mac, rebuild_settings=True)
-    if not result.get("settings_ready") or result.get("backend") != "bluez":
+    if not result.get("settings_ready") or result.get("backend") not in ("bluez", "att"):
         raise RuntimeError(result.get("settings_error") or result.get("settings_skipped")
-                           or "BlueZ settings handoff did not finish")
+                           or "Settings channel did not become readable")
     original = Settings(bytes.fromhex(result["raw_hex"]))
     if prior is not None and original != prior:
         raise RuntimeError("Original settings changed across reconnect")
@@ -85,23 +85,25 @@ def cycle(mac, number, prior, prior_sink):
     with playing(name) as (stream, sink_id):
         if prior_sink == sink_id:
             raise RuntimeError("New audio connection was not observed")
-        report("audio_started", cycle=number, sink_id=sink_id)
+        report("audio_started", cycle=number, sink_id=sink_id, backend=result["backend"])
         observe(mac, name, stream, sink_id, original)
         backup = save_backup(mac, original)
         report("backup_saved", path=str(backup))
         try:
             result = rpc("apply", mac, changes=changes, expected=original.raw.hex())
-            if result["backend"] != "bluez" or result["raw_hex"] != target.raw.hex():
-                raise RuntimeError("Requested gain change was not verified through BlueZ")
+            if result["raw_hex"] != target.raw.hex():
+                raise RuntimeError("Requested gain change did not match readback")
+            report("write_verified", cycle=number, backend=result["backend"])
             observe(mac, name, stream, sink_id, target)
         finally:
             current = read_settings(mac)
             if current == target:
                 restored = rpc("apply", mac, restore=str(backup), expected=target.raw.hex())
-                if restored["backend"] != "bluez" or restored["raw_hex"] != original.raw.hex():
+                if restored["raw_hex"] != original.raw.hex():
                     raise RuntimeError(f"Restore did not match the backup at {backup}")
             if read_settings(mac) != original:
                 raise RuntimeError(f"Original settings could not be verified. Backup: {backup}")
+        report("original_verified", cycle=number)
         if stream.poll() is not None or sink_state(name) != (sink_id, "RUNNING"):
             raise ConnectionError("Stereo output changed during restore")
     report("cycle_verified", cycle=number, sink_id=sink_id)

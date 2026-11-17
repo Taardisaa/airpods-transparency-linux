@@ -17,16 +17,16 @@
 
 ## Limitation
 
-**高级声音调节目前为实验性功能。** 在实测的 AirPods Pro 3（固件 8B34）上，长时间占用直接 ATT 通道曾导致耳机在约 30 秒后断开音频。新版会先恢复立体声音频，再短暂读取参数，把后续调节交给 BlueZ。实测一次在持续播放 65 秒后仍能读回原参数。多次重连后的读写稳定性仍在验证中。[实机验证记录](docs/hardware-validation.md)
+在 Ubuntu 22.04、AirPods Pro 3（固件 8B34）上，启用 Apple DeviceID 后已实测连续两次重连。每次在同一立体声输出播放 90 秒，期间调低两耳增音、读回并恢复原值。其他型号、固件和蓝牙适配器的表现仍需验证。[实机验证记录](docs/hardware-validation.md)
 
-声音参数可以在连接期间写入并读回验证。完成调节后，建议移除本工具设置的 Apple DeviceID 覆盖，恢复日常音频使用：
+日常只用音频、电量和聆听模式时，可以恢复 Linux 默认蓝牙身份：
 
 ```bash
 sudo python3 tools/configure_bluez.py --disable
 sudo systemctl restart bluetooth
 ```
 
-`--disable` 只移除本工具使用的 Apple DeviceID 值，并备份修改前配置。随后在系统蓝牙设置中重新连接耳机。再次调节高级参数时需要重新启用覆盖；高级调节的长期稳定性尚未通过验证。
+`--disable` 只移除本工具使用的 Apple DeviceID 值，并备份修改前配置。随后在系统蓝牙设置中重新连接耳机。需要经常调节通透参数时，可保留 Apple DeviceID 配置。
 
 ## 安装
 
@@ -63,7 +63,7 @@ python tools/install_desktop.py
 
 ### 启用自定义通透调节
 
-部分 AirPods 设置要求电脑报告苹果的蓝牙 DeviceID。临时启用高级声音调节时，执行：
+自定义通透参数要求这台电脑使用 Apple 蓝牙 DeviceID。首次启用时，执行：
 
 ```bash
 sudo python3 tools/configure_bluez.py --enable
@@ -162,7 +162,7 @@ airpods-control reconnect --mac AA:BB:CC:DD:EE:FF --json
 airpods-control read --mac AA:BB:CC:DD:EE:FF --json
 ```
 
-已启用 Apple DeviceID、音频已连上但仍读不到参数时，可以在“声音调节”页点击“重建高级调节连接”，或给上述命令加上 `--rebuild-settings`。这项操作会短暂断开这副耳机，先恢复音频，短暂读取高级参数，再把参数通道交给 BlueZ。具体错误见 `~/.local/state/airpods-transparency/service.log`。
+已启用 Apple DeviceID、音频已连上但仍读不到参数时，可以在“声音调节”页点击“重建高级调节连接”，或给上述命令加上 `--rebuild-settings`。这项操作会短暂断开这副耳机，先恢复音频，再验证高级设置能否连续读取。应用可以在 BlueZ 完成服务发现前通过短连接调参。具体错误见 `~/.local/state/airpods-transparency/service.log`。
 
 **型号、固件或当前模式显示“未知”？**
 

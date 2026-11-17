@@ -99,7 +99,7 @@ def test_reconnect_closes_control_session_before_reset_and_does_not_write(tmp_pa
         import struct
         from airpods_transparency.settings import Settings
         calls.append("handoff")
-        return Settings(struct.pack("<26f", *([1] + [0] * 25)))
+        return Settings(struct.pack("<26f", *([1] + [0] * 25))), "bluez"
     monkeypatch.setattr(engine, "handoff_settings", handoff)
     monkeypatch.setattr(service, "Controller", lambda *args, **kwargs: pytest.fail("must not write settings"))
     result = engine.dispatch({"action": "reconnect", "mac": mac, "rebuild_settings": True})
@@ -130,6 +130,7 @@ def test_explicit_att_channel_is_released_on_success_and_failure(tmp_path, monke
             return raw
     monkeypatch.setattr(bluez, "SettingsClient", Client)
     monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
+    monkeypatch.setattr(bluez, "stereo_connected", lambda mac: True)
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
     request = {"action": "read", "mac": "AA:BB:CC:DD:EE:FF", "transport": "att"}
     assert engine.dispatch(request)["raw_hex"] == raw.hex()
@@ -187,8 +188,10 @@ def test_handoff_releases_raw_before_bluez_read_and_reuses_bluez(monkeypatch):
             events.append(("close", self.backend))
     monkeypatch.setattr(bluez, "SettingsClient", Client)
     monkeypatch.setattr(bluez, "device_connected", lambda address: True)
+    monkeypatch.setattr(bluez, "stereo_connected", lambda address: True)
     engine = service.Engine()
-    initial = engine.handoff_settings(mac)
+    initial, backend = engine.handoff_settings(mac)
+    assert backend == "bluez"
     assert engine.dispatch({"action": "read", "mac": mac})["raw_hex"] == initial.raw.hex()
     engine.close()
     assert events == [("open", "att"), ("read", "att"), ("close", "att"),
@@ -227,9 +230,66 @@ def test_auto_apply_releases_att_after_readback(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setattr(bluez, "SettingsClient", Client)
     monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
+    monkeypatch.setattr(bluez, "stereo_connected", lambda mac: True)
     engine = service.Engine(profile_store=ProfileStore(tmp_path))
     response = engine.dispatch({"action": "apply", "mac": "AA:BB:CC:DD:EE:FF",
                                 "changes": {"left_amplification": -0.1}})
     assert response["raw_hex"] == raw.hex()
     assert events == ["open", "read", "write", "read", "close"]
     assert not engine.settings_clients
+
+
+def test_rebuild_accepts_reopened_att_before_bluez_discovers_characteristic(monkeypatch):
+    import struct
+    from airpods_transparency import bluez
+    mac = "AA:BB:CC:DD:EE:FF"
+    events = []
+    class Client:
+        def __init__(self, address, transport):
+            self.backend = transport
+        def __enter__(self):
+            events.append(("open", self.backend))
+            if self.backend == "bluez":
+                raise RuntimeError("BlueZ has no discovered transparency characteristic")
+            return self
+        def read(self):
+            events.append(("read", self.backend))
+            return struct.pack("<26f", *([1] + [0] * 25))
+        def __exit__(self, *args):
+            events.append(("close", self.backend))
+    monkeypatch.setattr(bluez, "SettingsClient", Client)
+    monkeypatch.setattr(bluez, "device_connected", lambda address: True)
+    monkeypatch.setattr(bluez, "stereo_connected", lambda address: True)
+    engine = service.Engine()
+    settings, backend = engine.handoff_settings(mac)
+    assert backend == "att" and len(settings.raw) == 104
+    assert not engine.settings_clients
+    assert events == [("open", "att"), ("read", "att"), ("close", "att"),
+                      ("open", "bluez"), ("open", "att"), ("read", "att"), ("close", "att")]
+
+
+@pytest.mark.parametrize("transport", ["auto", "att"])
+def test_settings_never_initiate_direct_att_before_stereo(monkeypatch, transport):
+    from airpods_transparency import bluez
+    opened = []
+    class Client:
+        backend = "bluez"
+        def __init__(self, mac, selected):
+            opened.append(selected)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setattr(bluez, "device_connected", lambda mac: True)
+    monkeypatch.setattr(bluez, "stereo_connected", lambda mac: False)
+    monkeypatch.setattr(bluez, "SettingsClient", Client)
+    channel = service.Engine().settings_channel("AA:BB:CC:DD:EE:FF", transport)
+    if transport == "auto":
+        with channel as client:
+            assert client.backend == "bluez"
+        assert opened == ["bluez"]
+    else:
+        with pytest.raises(ConnectionError, match="stereo audio"):
+            with channel:
+                pytest.fail("Direct ATT opened before stereo")
+        assert not opened

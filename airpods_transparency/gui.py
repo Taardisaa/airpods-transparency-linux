@@ -81,7 +81,7 @@ class Window(QtWidgets.QWidget):
         sound = QtWidgets.QWidget()
         sound_layout = QtWidgets.QVBoxLayout(sound)
         self.tabs.addTab(sound, "声音调节")
-        warning = QtWidgets.QLabel("实验性功能：高级参数访问可能导致耳机约 30 秒后断连。调参后建议关闭 Apple DeviceID 覆盖并重启蓝牙，步骤见 README 的 Limitation。")
+        warning = QtWidgets.QLabel("高级调节需要 Apple DeviceID。先点“读取设置”，调整滑条后点“备份并应用”。")
         warning.setWordWrap(True)
         sound_layout.addWidget(warning)
         self.rebuild_button = QtWidgets.QPushButton("重建高级调节连接（会中断音频）")
@@ -550,7 +550,7 @@ class Window(QtWidgets.QWidget):
                 self.controller.backend = result["backend"]
                 self.populate(Settings(bytes.fromhex(result["raw_hex"])))
             elif result.get("settings_skipped") == "linux_device_id":
-                self.status.setText("立体声音频已连接。当前使用 Linux 默认蓝牙身份，可点“读取设置”单独检查高级参数。")
+                self.status.setText("立体声音频已连接。当前使用 Linux 默认蓝牙身份。AirPods Pro 3 的高级调节需要在首次配置中启用 Apple DeviceID。")
                 self.refresh_overview()
             else:
                 self.status.setText("立体声音频已连接。高级声音参数暂不可用。")

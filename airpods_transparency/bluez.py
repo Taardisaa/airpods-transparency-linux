@@ -87,6 +87,11 @@ def a2dp_connected(path):
     return False
 
 
+def stereo_connected(mac):
+    paths = device_paths(mac)
+    return len(paths) == 1 and a2dp_connected(paths[0])
+
+
 def ensure_audio(path):
     if a2dp_connected(path):
         return
